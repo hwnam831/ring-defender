@@ -41,12 +41,13 @@ int main(int argc, char **argv){
     gcry_sexp_t pubkey, pvtkey;
 
     gcry_sexp_build(&pubkey, NULL, buf);
+    //gcry_sexp_dump(pubkey);
 
     FILE *pvtf = fopen("pvtkey", "r");
-    fread(buf, 2048, 1, pvtf);
+    fread(buf2, 2048, 1, pvtf);
     fclose(pvtf);
 
-    gcry_sexp_build(&pvtkey, NULL, buf);
+    gcry_sexp_build(&pvtkey, NULL, buf2);
 
     /*
     gcry_sexp_sprint(pubkey, GCRYSEXP_FMT_ADVANCED, buf2, 2047);
@@ -58,6 +59,24 @@ int main(int argc, char **argv){
 
     const char* msg = "Hello World";
     
+    gcry_sexp_t msgexp;
+    gcry_sexp_build(&msgexp, NULL, "(data (flags pkcs1) (value %s) )", msg);
 
+    gcry_sexp_t cipher;
+    err = gcry_pk_encrypt(&cipher, msgexp, pubkey);
+    if (err){
+        printf("encryption failed: %d\n", err);
+    }
+    
+    gcry_sexp_t cmsg = gcry_sexp_find_token(cipher, "a", 1);
+    
+    gcry_sexp_t ncipher;
+    gcry_sexp_build(&ncipher, NULL, "(enc-val (flags pkcs1) (rsa %S ) )", cmsg);
+    //gcry_sexp_dump(ncipher);
+
+    gcry_sexp_t outmsg;
+    gcry_pk_decrypt(&outmsg, ncipher, pvtkey);
+
+    gcry_sexp_dump(outmsg);
 
 }
