@@ -1,5 +1,5 @@
 #include <gcrypt.h>
-#define NEED_GCRYPT_VERSION "1.6.0"
+#define NEED_GCRYPT_VERSION "1.5.0"
 
 int main(int argc, char **argv){
     if (!gcry_check_version(NEED_GCRYPT_VERSION)){

