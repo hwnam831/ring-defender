@@ -15,7 +15,7 @@
 #define NEED_GCRYPT_VERSION "1.5.0"
 #define SNAME "/home/hwnam/mysem"
 #define NUMBER_CORES 8
-#define READ_TIMES 128
+#define READ_TIMES 2048
 
 sem_t *mutex;
 sem_t *mutex1;
@@ -262,7 +262,7 @@ int main_attacker(int coreID, int desiredSlice) {
 			time1= (((uint64_t)cycles_high << 32) | cycles_low);
 			time2= (((uint64_t)cycles_high1 << 32) | cycles_low1);
 			/* Print LLC Access Time */
-			fprintf(logfp, "attacker,\t %lu, \t %lu\n", time1, time2-time1);
+			fprintf(logfp, "core %d to slice %d,\t %lu, \t %lu\n", coreID, desiredSlice, time1, time2-time1);
 		}
 
 	}
