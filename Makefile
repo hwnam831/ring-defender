@@ -19,5 +19,8 @@ attacker: attacker.o
 	$(CC) $(CFLAGS) -o $@ $< $(GCRYPTFLAGS)
 all: $(EXECS)
 
+run: victim
+	sudo ./victim > victim.log
+
 clean:
-	rm $(EXECS) *.o
+	rm $(EXECS) *.o *.log

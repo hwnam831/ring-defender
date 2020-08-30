@@ -4,8 +4,8 @@
  * Copyright (c) 2019, Alireza Farshin, KTH Royal Institute of Technology - All Rights Reserved
  */
 
-#include "../lib/memory-utils.c"
-#include "../lib/cache-utils.c"
+#include "./lib/memory-utils.c"
+#include "./lib/cache-utils.c"
 #include <sched.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
 			time1= (((uint64_t)cycles_high << 32) | cycles_low);
 			time2= (((uint64_t)cycles_high1 << 32) | cycles_low1);
 			/* Print LLC Access Time */
-			printf("%lu\n", time2-time1);
+			printf("%lu\t%lu\n",time1, time2-time1);
 		}
 
 	}
