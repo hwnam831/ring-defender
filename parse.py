@@ -17,6 +17,6 @@ for idx in victimlog.index:
     #print(len(trace))
     bit = int(duration > avg)
     traces.append((bit, trace))
-
+print(attacklog['direction'][1])
 with open(attacklog['direction'][1]+'.pkl','wb') as f:
     pickle.dump(traces, f)

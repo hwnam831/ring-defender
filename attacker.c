@@ -17,7 +17,6 @@
 #define NUMBER_CORES 8
 #define READ_TIMES 256
 
-sem_t mutex;
 
 void CorePin(int coreID)
 {
@@ -30,117 +29,32 @@ void CorePin(int coreID)
 	}
 }
 
-void* thread_victim(){
-	CorePin(2);
-    if (!gcry_check_version(NEED_GCRYPT_VERSION)){
-        fprintf (stderr, "libgcrypt is too old (need %s, have %s)\n",
-         NEED_GCRYPT_VERSION, gcry_check_version (NULL));
-        exit (2);
-    }
-
-    gcry_error_t err = 0;
-
-    /* We don't want to see any warnings, e.g. because we have not yet
-     parsed program options which might be used to suppress such
-     warnings. */
-    gcry_control (GCRYCTL_SUSPEND_SECMEM_WARN);
-
-    /* Allocate a pool of 16k secure memory. */
-    gcry_control (GCRYCTL_INIT_SECMEM, 16384, 0);
-
-    /* It is now okay to let Libgcrypt complain when there was/is
-        a problem with the secure memory. */
-    gcry_control (GCRYCTL_RESUME_SECMEM_WARN);
-
-    /* Tell Libgcrypt that initialization has completed. */
-    gcry_control (GCRYCTL_INITIALIZATION_FINISHED, 0);
-
-    if (!gcry_control (GCRYCTL_INITIALIZATION_FINISHED_P))
-    {
-      fputs ("libgcrypt has not been initialized\n", stderr);
-      abort ();
-    }
 
 
-    char buf[2048], buf2[2048];
-    FILE *pubf = fopen("pubkey", "r");
-    fread(buf, 2048, 1, pubf);
-    fclose(pubf);
-    //printf("%s\n",buf);
-
-    gcry_sexp_t pubkey, pvtkey;
-
-    gcry_sexp_build(&pubkey, NULL, buf);
-    //gcry_sexp_dump(pubkey);
-
-    FILE *pvtf = fopen("pvtkey", "r");
-    fread(buf2, 2048, 1, pvtf);
-    fclose(pvtf);
-
-    gcry_sexp_build(&pvtkey, NULL, buf2);
-
-    /*
-    gcry_sexp_sprint(pubkey, GCRYSEXP_FMT_ADVANCED, buf2, 2047);
-    printf("%s\n",buf2);
-
-    gcry_sexp_sprint(pvtkey, GCRYSEXP_FMT_ADVANCED, buf2, 2047);
-    printf("%s\n",buf2);
-    */
-
-    const char* msg = "Hello World";
+int main(int argc, char **argv){
     
-    gcry_sexp_t msgexp;
-    gcry_sexp_build(&msgexp, NULL, "(data (flags pkcs1) (value %s) )", msg);
+    if(argc!=3){
+		printf("Wrong Input! Enter desired slice and coreID!\n");
+		printf("Enter: %s <coreID> <sliceNumber>\n", argv[0]);
+		exit(1);
+	}
 
-    gcry_sexp_t cipher;
-    err = gcry_pk_encrypt(&cipher, msgexp, pubkey);
-    if (err){
-        printf("encryption failed: %d\n", err);
-    }
-    
-    gcry_sexp_t cmsg = gcry_sexp_find_token(cipher, "a", 1);
-    
-    gcry_sexp_t ncipher;
-    gcry_sexp_build(&ncipher, NULL, "(enc-val (flags pkcs1) (rsa %S ) )", cmsg);
-    //gcry_sexp_dump(ncipher);
-
-    printf("start decrypt\n");
-	sem_post(&mutex);
-    gcry_sexp_t outmsg;
-    gcry_pk_decrypt(&outmsg, ncipher, pvtkey);
-
-    gcry_sexp_dump(outmsg);
-    pthread_exit(NULL);
-}
-
-void* thread_attacker() {
-
-	/*
-	 * Check arguments: should contain coreID and slice number
-	 */
-
-	/*
-    pid_t cpid;
-    cpid = fork();
-
-    if (cpid == 0){
-        //child process = victim
-        //CorePin(1);
-        int retval = main_victim();
-        return retval;
-    }
-	printf("hello from parent\n");
-	*/
-	/* 
-	 * Ping program to core-0 for finding chunks
-	 * Later the program will be pinned to the desired coreID
-	 */
 	int coreID;
-	int desiredSlice;
-	coreID=1;
-	desiredSlice=2;
-	CorePin(0);
+	sscanf (argv[1],"%d",&coreID);
+	if(coreID > NUMBER_CORES*2-1 || coreID < 0){
+		printf("Wrong Core! CoreID should be less than %d and more than 0!\n", NUMBER_CORES);
+		exit(1);   
+	}
 
+	int desiredSlice;
+	sscanf (argv[2],"%d",&desiredSlice);
+	if(desiredSlice > NUMBER_SLICES-1 || desiredSlice < 0){
+		printf("Wrong slice! Slice should be less than %d and more than 0!\n", NUMBER_SLICES);
+		exit(1);   
+	}
+	CorePin(0);
+	FILE *logfp = fopen("attack2.log", "w");
+	fprintf(logfp, "direction,time,accesstime\n");
 	/* Get a 1GB-hugepage */
 	void *buffer = create_buffer();
 
@@ -148,9 +62,9 @@ void* thread_attacker() {
 	uint64_t bufPhyAddr = get_physical_address(buffer);
 
 	/* Memory Chunks -> Fit in LLC */
-	unsigned long long nTotalChunks=(unsigned long long)LLC_WAYS/2+L2_WAYS;
+	unsigned long long nTotalChunks=(unsigned long long)LLC_WAYS+L2_WAYS;
 	/* Memory Chunks -> Fit in L2 */
-	unsigned long long nL2Chunks=(unsigned long long)LLC_WAYS/2;
+	unsigned long long nL2Chunks=(unsigned long long)LLC_WAYS;
 
 
 	/* Memory Chunks -> Fit in L1 */
@@ -202,98 +116,84 @@ void* thread_attacker() {
         
 	/* Ping program to coreID */
     CorePin(coreID);
+	//sched_yield();
 
 	unsigned char *slice;
-	sem_wait(&mutex);
-	printf("Start measuring\n");
-	for(k=0;k<READ_TIMES;k++) {
-		/* Fill Arrays */
-		for(i=0; i<nTotalChunks;i++) {
-			slice=totalChunks[i];
-			for(j=0;j<64;j++) {
-				slice[j]=10+20;
-			}
-		}
+	int maxnum = READ_TIMES*(nL2Chunks/stride + 1)*2;
+	unsigned long *times = (unsigned long*)malloc(sizeof(unsigned long)*maxnum);
+	int *accesstimes = (int*)malloc(sizeof(int)*READ_TIMES*maxnum);
+	int cnt = 0;
 
-		/* Flush Array */
+
+	// Fill Arrays 
+	for(i=0; i<nTotalChunks;i++) {
+		slice=totalChunks[i];
+		for(j=0;j<64;j++) {
+			slice[j]=10+20;
+		}
+	}
+	for(k=0;k<READ_TIMES;k++) {
+		
+		/* Flush Array 
 		for(i=0; i<nTotalChunks;i++) {
 			slice=totalChunks[i];
-			for(j=0;j<64;j++) {
-				_mm_clflush(&slice[j]);
+			for(j=0;j<64;j+=8) {
+				_mm_prefetch(&slice[j],_MM_HINT_T2);
 			}
-		}
+		}*/
 
 		register uint64_t time1, time2;
-		unsigned cycles_high, cycles_low, cycles_high1, cycles_low1;
 		unsigned int val=0;
-
-		/* Read Array: Gives Memory Access Time*/
-		for(i=0; i<nTotalChunks;i=i+stride) {
-			asm volatile ("CPUID\n\t"
-				"RDTSC\n\t"
-				"mov %%edx, %0\n\t"
-				"mov %%eax, %1\n\t": "=r" (cycles_high), "=r" (cycles_low):: "rax", "rbx", "rcx", "rdx");
-			/* Measured operation */
-			val=*(unsigned int*)totalChunks[i];
-
-			asm volatile ("RDTSCP\n\t"
-				"mov %%edx, %0\n\t"
-				"mov %%eax, %1\n\t"
-				"CPUID\n\t": "=r" (cycles_high1), "=r" (cycles_low1):: "rax", "rbx", "rcx", "rdx");
-			time1= (((uint64_t)cycles_high << 32) | cycles_low);
-			time2= (((uint64_t)cycles_high1 << 32) | cycles_low1);
-			/* Print Memory Access Time */
-			//printf("%lu\n", time2-time1);
-		}
-
-		/* Gives LLC Access Time*/
+		
+		
+		// Gives LLC Access Time
 		for(i=0; i<nL2Chunks;i=i+stride) {
 			slice=totalChunks[i];
-			asm volatile ("CPUID\n\t"
-				"RDTSC\n\t"
-				"mov %%edx, %0\n\t"
-				"mov %%eax, %1\n\t": "=r" (cycles_high), "=r" (cycles_low):: "rax", "rbx", "rcx", "rdx");
-
-			/* Measured operation */
-			val=*slice;
-
 			asm volatile ("RDTSCP\n\t"
-				"mov %%edx, %0\n\t"
-				"mov %%eax, %1\n\t"
-				"CPUID\n\t": "=r" (cycles_high1), "=r" (cycles_low1):: "rax", "rbx", "rcx", "rdx");
-			time1= (((uint64_t)cycles_high << 32) | cycles_low);
-			time2= (((uint64_t)cycles_high1 << 32) | cycles_low1);
-			/* Print LLC Access Time */
-			printf("%lu \t %lu\n", time2-time1, time1);
+				"shl $32,%%rdx; "
+				"or %%rdx,%%rax"
+				: "=a"(time1)
+				:
+				: "rcx", "rdx");
+
+			// Measured operation 
+			val=*slice;
+			_mm_clflush(slice);
+			asm volatile ("RDTSCP\n\t"
+				"shl $32,%%rdx; "
+				"or %%rdx,%%rax"
+				: "=a"(time2)
+				:
+				: "rcx", "rdx");
+			
+			_mm_prefetch(slice, _MM_HINT_T2);
+			_mm_prefetch(&slice[1], _MM_HINT_T2);
+			_mm_prefetch(&slice[2], _MM_HINT_T2);
+			_mm_prefetch(&slice[4], _MM_HINT_T2);
+			_mm_prefetch(&slice[8], _MM_HINT_T2);
+			_mm_prefetch(&slice[16], _MM_HINT_T2);
+			
+			times[cnt] = time1;
+			accesstimes[cnt++] = time2-time1;
+
 		}
 
+	}
+	
+
+
+	for (k = 0; k<cnt; k++){
+		fprintf(logfp, "core%dToSlice%d,\t %lu, \t %lu\n", coreID, desiredSlice, times[k], accesstimes[k]);
 	}
 
 	/* Free the buffers */
 	free_buffer(buffer);
 	free(totalChunks);
 	free(totalChunksPhysical);
-
-	pthread_exit(NULL);
-}
-
-int main(int argc, char **argv){
-    
-    //shared exit flag
-    //short *exited;
-    //exited = mmap(NULL, sizeof(short), PROT_READ | PROT_WRITE, MAP_SHARED, -1, 0);
-    //*exited = 0;
-
-	//sem_t sem_i, sem_f;
-	pthread_t thread_v, thread_a;
-	int errn;
-	errn = sem_init(&mutex, 0, 0);
-	//sem_getvalue(&sem_i, &errn);
-	pthread_create(thread_a, NULL, thread_attacker, NULL);
-	pthread_create(thread_v, NULL, thread_victim, NULL);
-	pthread_join(thread_victim,NULL); 
-    pthread_join(thread_attacker,NULL); 
-    sem_destroy(&mutex); 
+	fclose(logfp);
+	free(times);
+	free(accesstimes);
+	return 0;
     return 0; 
 
 }

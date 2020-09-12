@@ -20,7 +20,8 @@ attacker: attacker.o
 all: $(EXECS)
 
 run: victim
-	sudo ./victim > victim.log
+	sudo ./victim 1 3 > victim.log
+	python3 parse.py
 
 clean:
 	rm $(EXECS) *.o *.log
