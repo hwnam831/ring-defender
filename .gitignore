@@ -3,3 +3,6 @@ pubkey
 pvtkey
 defender
 keygen
+attacker
+victim
+*.log
