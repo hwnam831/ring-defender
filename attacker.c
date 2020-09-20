@@ -270,7 +270,7 @@ void* thread_attacker() {
 	}
 
 	/* Free the buffers */
-	free_buffer(buffer);
+	free(buffer);
 	free(totalChunks);
 	free(totalChunksPhysical);
 

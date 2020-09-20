@@ -57,13 +57,13 @@
 #define SKYLAKE_L2_WAYS 16
 #define SKYLAKE_L2_SETS (L2_SIZE/LINE)/(L2_WAYS)
 
-#define HASWELL_LLC_SIZE (20UL*1024*1024)
-#define HASWELL_LLC_WAYS 20
-#define HASWELL_LLC_SETS (LLC_SIZE/LINE)/(LLC_WAYS*NUMBER_SLICES)
-#define HASWELL_SLICE_SIZE (LLC_SIZE/(NUMBER_SLICES))
-#define HASWELL_L2_SIZE (256UL*1024)
-#define HASWELL_L2_WAYS 8
-#define HASWELL_L2_SETS (L2_SIZE/LINE)/(L2_WAYS)
+#define SKYLAKES_LLC_SIZE (2UL*1024*1024)*NUMBER_SLICES
+#define SKYLAKES_LLC_WAYS 16
+#define SKYLAKES_LLC_SETS (SKYLAKES_LLC_SIZE/LINE)/(SKYLAKES_LLC_WAYS*NUMBER_SLICES)
+#define SKYLAKES_SLICE_SIZE (SKYLAKES_LLC_SIZE/(NUMBER_SLICES))
+#define SKYLAKES_L2_SIZE (256UL*1024)
+#define SKYLAKES_L2_WAYS 4
+#define SKYLAKES_L2_SETS (SKYLAKES_L2_SIZE/LINE)/(SKYLAKES_L2_WAYS)
 
 /* Set indexes */
 
@@ -73,11 +73,11 @@
 #define SKYLAKE_L3_INDEX_STRIDE 0x20000 /* Offset required to get the same indexes bit 17 = bit 16 (MSB bit of L3_INDEX_PER_SLICE) + 1 */
 #define SKYLAKE_L2_INDEX_STRIDE 0x10000 /* Offset required to get the same indexes bit 16 = bit 15 (MSB bit of L2_INDEX) + 1 */
 
-#define HASWELL_L3_INDEX_PER_SLICE 0x1FFC0 /* 11 bits - [16-6] - 2048 sets per slice + 20 way for each slice (2.5MB) */
-#define HASWELL_L2_INDEX 0x7FC0 /* 9 bits - [14-6] - 512 sets + 8 way for each core  */
-#define HASWELL_L1_INDEX 0xFC0 /* 6 bits - [11-6] - 64 sets + 8 way for each core  */
-#define HASWELL_L3_INDEX_STRIDE 0x20000 /* Offset required to get the same indexes bit 17 = bit 16 (MSB bit of L3_INDEX_PER_SLICE) + 1 */
-#define HASWELL_L2_INDEX_STRIDE 0x8000 /* Offset required to get the same indexes bit 15 = bit 14 (MSB bit of L2_INDEX) + 1 */
+#define SKYLAKES_L3_INDEX_PER_SLICE 0x1FFC0 /* 11 bits - [16-6] - 2048 sets per slice + 20 way for each slice (2.5MB) */
+#define SKYLAKES_L2_INDEX 0xFFC0 /* 10 bits - [15-6] - 1024 sets + 16 way for each core  */
+#define SKYLAKES_L1_INDEX 0xFC0 /* 6 bits - [11-6] - 64 sets + 8 way for each core  */
+#define SKYLAKES_L3_INDEX_STRIDE 0x20000 /* Offset required to get the same indexes bit 17 = bit 16 (MSB bit of L3_INDEX_PER_SLICE) + 1 */
+#define SKYLAKES_L2_INDEX_STRIDE 0x10000 /* Offset required to get the same indexes bit 16 = bit 15 (MSB bit of L2_INDEX) + 1 */
 
 #ifdef SKYLAKE 
 #define L3_INDEX_PER_SLICE SKYLAKE_L3_INDEX_PER_SLICE
@@ -93,18 +93,18 @@
 #define L3_INDEX_STRIDE SKYLAKE_L3_INDEX_STRIDE
 #define L2_INDEX_STRIDE SKYLAKE_L2_INDEX_STRIDE
 #else
-#define L3_INDEX_PER_SLICE HASWELL_L3_INDEX_PER_SLICE
-#define L2_INDEX HASWELL_L2_INDEX
-#define L1_INDEX HASWELL_L1_INDEX
-#define LLC_SIZE HASWELL_LLC_SIZE
-#define LLC_WAYS HASWELL_LLC_WAYS
-#define LLC_SETS HASWELL_LLC_SETS
-#define SLICE_SIZE HASWELL_SLICE_SIZE
-#define L2_SIZE HASWELL_L2_SIZE
-#define L2_WAYS HASWELL_L2_WAYS
-#define L2_SETS HASWELL_L2_SETS
-#define L3_INDEX_STRIDE HASWELL_L3_INDEX_STRIDE
-#define L2_INDEX_STRIDE HASWELL_L2_INDEX_STRIDE
+#define L3_INDEX_PER_SLICE SKYLAKES_L3_INDEX_PER_SLICE
+#define L2_INDEX SKYLAKES_L2_INDEX
+#define L1_INDEX SKYLAKES_L1_INDEX
+#define LLC_SIZE SKYLAKES_LLC_SIZE
+#define LLC_WAYS SKYLAKES_LLC_WAYS
+#define LLC_SETS SKYLAKES_LLC_SETS
+#define SLICE_SIZE SKYLAKES_SLICE_SIZE
+#define L2_SIZE SKYLAKES_L2_SIZE
+#define L2_WAYS SKYLAKES_L2_WAYS
+#define L2_SETS SKYLAKES_L2_SETS
+#define L3_INDEX_STRIDE SKYLAKES_L3_INDEX_STRIDE
+#define L2_INDEX_STRIDE SKYLAKES_L2_INDEX_STRIDE
 #endif
 
 /* 

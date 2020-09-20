@@ -34,7 +34,7 @@
 #define FLAGS (MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_FIXED | MAP_HUGE_1GB)
 #else
 #define ADDR (void *)(0x0UL)
-#define FLAGS (MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB)
+#define FLAGS (MAP_PRIVATE | MAP_NORESERVE | MAP_ANONYMOUS | MAP_HUGETLB)
 #endif
 
 
@@ -78,10 +78,14 @@ void* create_buffer(void) {
 
 void free_buffer(void* buffer) {
 	/* munmap() length of MAP_HUGETLB memory must be hugepage aligned */
+	#ifdef USE_HUGEPAGE
 	if (munmap(buffer, SIZE)) {
 		perror("munmap");
 		exit(EXIT_FAILURE);
 	}
+	#else
+	free(buffer);
+	#endif
 }
 
 /*

@@ -15,7 +15,7 @@ keygen: keygen.o
 victim: main.o
 	$(CC) $(CFLAGS) -o $@ $< $(GCRYPTFLAGS)
 
-attacker: attacker.o
+attacker: L3_access_measurement.o
 	$(CC) $(CFLAGS) -o $@ $< $(GCRYPTFLAGS)
 all: $(EXECS)
 

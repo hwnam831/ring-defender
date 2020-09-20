@@ -35,7 +35,7 @@
  */
 
 /* Architecture related */
-#define SKYLAKE /* Can be changed to HASWELL or SKYLAKE -> Will be changed automatically by check_cpu.sh */
+//#define SKYLAKE /* Can be changed to HASWELL or SKYLAKE -> Will be changed automatically by check_cpu.sh */
 #define SKYLAKE_SERVER_MODEL 85
 #define HASWELL_SERVER_MODEL 63
 
@@ -73,31 +73,30 @@
  */
 
 /* MSR Addresses */
-#define PMON_GLOBAL_CTL_ADDRESS 0x700
-const unsigned long long * CHA_CBO_EVENT_ADDRESS = (unsigned long long []) {0x0E01, 0x0E11, 0x0E21, 0x0E31, 0x0E41, 0x0E51, 0x0E61, 0x0E71, 0x0E81, 0x0E91,
-																0x0EA1, 0x0EB1, 0x0EC1, 0x0ED1, 0x0EE1, 0x0EF1, 0x0F01, 0x0F11, 0x0F21,	0x0F31,	0x0F41, 
-																0x0F51, 0x0F61, 0x0F71, 0x0F81, 0x0F91, 0x0FA1, 0x0FB1};
+#define PMON_GLOBAL_CTL_ADDRESS 0xE01
+const unsigned long long * CHA_CBO_EVENT_ADDRESS = \
+	(unsigned long long []) {0x0700, 0x0710, 0x0720, 0x0730, 0x0740, 0x0750};
+																
 
-const unsigned long long * CHA_CBO_CTL_ADDRESS = (unsigned long long []) {0x0E00, 0x0E10, 0x0E20, 0x0E30, 0x0E40, 0x0E50, 0x0E60, 0x0E70, 0x0E80, 0x0E90,
-																0x0EA0, 0x0EB0, 0x0EC0, 0x0ED0, 0x0EE0, 0x0EF0, 0x0F00, 0x0F10, 0x0F20, 0x0F30,	0x0F40,	
-																0x0F50, 0x0F60, 0x0F70, 0x0F80, 0x0F90, 0x0FA0, 0x0FB0};
+const unsigned long long * CHA_CBO_CTL_ADDRESS = \
+	(unsigned long long []) {0x0706, 0x0716, 0x0726, 0x0736, 0x0746, 0x0756};
 
 const unsigned long long * CHA_CBO_FILTER_ADDRESS = (unsigned long long []) {0x0E05, 0x0E15, 0x0E25, 0x0E35, 0x0E45, 0x0E55, 0x0E65, 0x0E75, 0x0E85, 0x0E95,
 																0x0EA5, 0x0EB5, 0x0EC5, 0x0ED5, 0x0EE5, 0x0EF5, 0x0F05, 0x0F15, 0x0F25, 0x0F35, 0x0F45,
 																0x0F55, 0x0F65, 0x0F75, 0x0F85, 0x0F95, 0x0FA5, 0x0FB5};
 
-const unsigned long long * CHA_CBO_COUNTER_ADDRESS = (unsigned long long []) {0x0E08, 0x0E18, 0x0E28, 0x0E38, 0x0E48, 0x0E58, 0x0E68, 0x0E78, 0x0E88, 0x0E98,
-																0x0EA8, 0x0EB8, 0x0EC8, 0x0ED8, 0x0EE8, 0x0EF8, 0x0F08, 0x0F18, 0x0F28, 0x0F38,	0x0F48,
-																0x0F58, 0x0F68, 0x0F78, 0x0F88, 0x0F98, 0x0FA8, 0x0FB8};
+const unsigned long long * CHA_CBO_COUNTER_ADDRESS = \
+	(unsigned long long []) {0x0706, 0x0716, 0x0726, 0x0736, 0x0746, 0x0756};
+
 /* MSR Values */
 #define ENABLE_COUNT_SKYLAKE 0x2000000000000000 
 #define DISABLE_COUNT_SKYLAKE 0x8000000000000000
-#define ENABLE_COUNT_HASWELL 0x20000000
-#define DISABLE_COUNT_HASWELL 0x80000000
-#define SELECTED_EVENT 0x441134 /* Event: LLC_LOOKUP Mask: Any request (All snooping signals) */
+#define ENABLE_COUNT_SKYLAKES 0x20000000
+#define DISABLE_COUNT_SKYLAKES 0x80000000
+#define SELECTED_EVENT 0x448F34 /* Event: LLC_LOOKUP Mask: Any request (All snooping signals) */
 #define RESET_COUNTERS 0x30002
 #define FILTER_BOX_VALUE_SKYLAKE 0x01FE0000
-#define FILTER_BOX_VALUE_HASWELL 0x007E0000
+#define FILTER_BOX_VALUE_SKYLAKES 0x007E0000
 
 
 #ifdef SKYLAKE 
@@ -106,10 +105,10 @@ const unsigned long long * CHA_CBO_COUNTER_ADDRESS = (unsigned long long []) {0x
 #define DISABLE_COUNT DISABLE_COUNT_SKYLAKE	
 #define FILTER_BOX_VALUE FILTER_BOX_VALUE_SKYLAKE															
 #else
-#define NUMBER_SLICES 8 /* Can be different for different CPUs */
-#define ENABLE_COUNT ENABLE_COUNT_HASWELL
-#define DISABLE_COUNT DISABLE_COUNT_HASWELL
-#define FILTER_BOX_VALUE FILTER_BOX_VALUE_HASWELL	
+#define NUMBER_SLICES 6 /* Can be different for different CPUs */
+#define ENABLE_COUNT ENABLE_COUNT_SKYLAKES
+#define DISABLE_COUNT DISABLE_COUNT_SKYLAKES
+#define FILTER_BOX_VALUE FILTER_BOX_VALUE_SKYLAKES	
 #endif
 
 
@@ -245,17 +244,24 @@ void uncore_init() {
 		wrmsr_on_cpu_0(CHA_CBO_EVENT_ADDRESS[i], 1, register_value);
 	}
 
-	/* Reset CHA Counters */
+	//Reset Counters to Zero
+	register_value[0]=0;
+	for(i=0; i<NUMBER_SLICES; i++) {
+		wrmsr_on_cpu_0(CHA_CBO_COUNTER_ADDRESS[i],1,register_value);
+	}
+	/* Reset CHA Counters
 	register_value[0]=RESET_COUNTERS;
 	for(i=0; i<NUMBER_SLICES; i++) {
 		wrmsr_on_cpu_0(CHA_CBO_CTL_ADDRESS[i],1,register_value);
 	}
+	*/
 
-	/* Set Filter BOX */
+	/* 
+	//Set Filter BOX 
 	register_value[0]=FILTER_BOX_VALUE;
 	for(i=0; i<NUMBER_SLICES; i++) {
 		wrmsr_on_cpu_0(CHA_CBO_FILTER_ADDRESS[i], 1, register_value);
-	}
+	}*/
 
 	/* Enable counting */
 	register_value[0]=ENABLE_COUNT;
