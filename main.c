@@ -102,8 +102,8 @@ int main_victim(){
     //gcry_sexp_dump(ncipher);
 
     //printf("start decrypt\n");
-	sem_wait(mutex);
-	sem_post(mutex1);
+	//sem_wait(mutex);
+	//sem_post(mutex1);
     gcry_sexp_t outmsg;
     gcry_pk_decrypt(&outmsg, ncipher, pvtkey);
 
@@ -306,7 +306,7 @@ int main(int argc, char **argv){
 		exit(1);   
 	}
 	*/
-
+	/*
 	int errn;
 	mutex = (sem_t *)mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, \
 		MAP_NORESERVE | MAP_ANONYMOUS | MAP_SHARED, -1, 0);
@@ -315,7 +315,8 @@ int main(int argc, char **argv){
 	errn = sem_init(mutex, 1, 0);
 	errn = sem_init(mutex1, 1, 0);
 	printf("custom lock is %d\n",custom_lock);
-	
+	*/
+	CorePin(3);
 	//pthread_mutexattr_t mattr;
 	//pthread_mutexattr_init(&mattr);
 	//pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
@@ -327,6 +328,7 @@ int main(int argc, char **argv){
 
 
 	//sem_getvalue(&sem_i, &errn);
+	/*
     pid_t cpid;
     cpid = fork();
 
@@ -342,5 +344,7 @@ int main(int argc, char **argv){
         //*exited = 1;
         return retval;
     }
+	*/
+	return main_victim();
 
 }
