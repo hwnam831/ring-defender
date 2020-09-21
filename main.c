@@ -254,7 +254,7 @@ int main_attacker(int coreID, int desiredSlice) {
 			_mm_prefetch(&slice[1], _MM_HINT_T2);
 			_mm_prefetch(&slice[2], _MM_HINT_T2);
 			_mm_prefetch(&slice[4], _MM_HINT_T2);
-			_mm_prefetch(&slice[8], _MM_HINT_T2);
+			//_mm_prefetch(&slice[8], _MM_HINT_T2);
 			//_mm_prefetch(&slice[16], _MM_HINT_T2);
 			times[cnt] = time1;
 			accesstimes[cnt++] = time2-time1;

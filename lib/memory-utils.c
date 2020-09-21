@@ -17,7 +17,7 @@
  * Definitions + mmap Flags
  */
 
-//#define USE_HUGEPAGE	/* Should be defined for allocating hugepages; comment it for 4KB-pages */
+#define USE_HUGEPAGE	/* Should be defined for allocating hugepages; comment it for 4KB-pages */
 
 #define SIZE (1*1024UL*1024*1024)	/* Buffer Size -> 8*1GB */
 //#define SIZE (4*1024UL*1024)
@@ -46,7 +46,7 @@ void* create_buffer(void) {
 
 	#ifdef USE_HUGEPAGE
 	/* Allocate some memory using mmap (hugepage 1GB/2MB) based on the input FLAGS */
-	void *buffer = mmap(ADDR, SIZE, PROTECTION, FLAGS, 0, 0);
+	void *buffer = mmap(ADDR, SIZE, PROTECTION, FLAGS, -1, 0);
 	if (buffer == MAP_FAILED) {
 		fprintf(stderr, "Failed to allocate memory for buffer\n");
 		exit(1);
