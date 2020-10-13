@@ -6,3 +6,5 @@ keygen
 attacker
 victim
 *.log
+*.pkl
+.ipynb_checkpoints/

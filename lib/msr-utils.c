@@ -287,7 +287,7 @@ int find_CHA_CBO() {
 	unsigned long long max_value=0;
 	int max_index=0;
 	for(i=0; i<NUMBER_SLICES; i++){
-		//printf(" %llu", CHA_CBO_value[i]);
+		//printf(" %llu\t%d\n", CHA_CBO_value[i],i);
 		if(CHA_CBO_value[i]>max_value){
 			max_value=CHA_CBO_value[i];
 			max_index=i;

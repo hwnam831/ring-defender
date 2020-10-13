@@ -19,7 +19,7 @@
 
 #define USE_HUGEPAGE	/* Should be defined for allocating hugepages; comment it for 4KB-pages */
 
-#define SIZE (1*1024UL*1024*1024)	/* Buffer Size -> 8*1GB */
+#define SIZE (1024UL*1024*1024)	/* Buffer Size -> 8*1GB */
 //#define SIZE (4*1024UL*1024)
 #define PROTECTION (PROT_READ | PROT_WRITE)	/* Protection of the mapping: page may be read and written */
 

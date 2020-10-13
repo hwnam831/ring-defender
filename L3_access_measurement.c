@@ -10,7 +10,7 @@
 #include <inttypes.h>
 #include <stdlib.h>
 
-#define NUMBER_CORES 8
+#define NUMBER_CORES 6
 #define READ_TIMES 1000
 
 /*
@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
 	 * Later the program will be pinned to the desired coreID
 	 */
 	CorePin(0);
-	FILE *logfp = fopen("attack.log", "w");
+	FILE *logfp = fopen("voidattack.log", "w");
 	fprintf(logfp, "direction,time,accesstime\n");
 	/* Get a 1GB-hugepage */
 	void *buffer = create_buffer();
@@ -141,46 +141,17 @@ int main(int argc, char **argv) {
 	unsigned long *times = (unsigned long*)malloc(sizeof(unsigned long)*maxnum);
 	int *accesstimes = (int*)malloc(sizeof(int)*READ_TIMES*maxnum);
 	int cnt = 0;
-	for(k=0;k<READ_TIMES;k++) {
-		/* Fill Arrays 
-		for(i=0; i<nTotalChunks;i++) {
+	//fill arrays
+	for(i=0; i<nTotalChunks;i++) {
 			slice=totalChunks[i];
 			for(j=0;j<64;j++) {
 				slice[j]=10+20;
 			}
 		}
-		
-		// Flush Array 
-		for(i=0; i<nTotalChunks;i++) {
-			slice=totalChunks[i];
-			for(j=0;j<64;j++) {
-				_mm_clflush(&slice[j]);
-			}
-		}
-		*/
+	for(k=0;k<READ_TIMES;k++) {
 
 		register uint64_t time1, time2;
-		unsigned cycles_high, cycles_low, cycles_high1, cycles_low1;
 		unsigned int val=0;
-		/*
-		// Read Array: Gives Memory Access Time
-		for(i=0; i<nTotalChunks;i=i+stride) {
-			asm volatile ("CPUID\n\t"
-				"RDTSC\n\t"
-				"mov %%edx, %0\n\t"
-				"mov %%eax, %1\n\t": "=r" (cycles_high), "=r" (cycles_low):: "rax", "rbx", "rcx", "rdx");
-			// Measured operation 
-			val=*(unsigned int*)totalChunks[i];
-
-			asm volatile ("RDTSCP\n\t"
-				"mov %%edx, %0\n\t"
-				"mov %%eax, %1\n\t"
-				"CPUID\n\t": "=r" (cycles_high1), "=r" (cycles_low1):: "rax", "rbx", "rcx", "rdx");
-			time1= (((uint64_t)cycles_high << 32) | cycles_low);
-			time2= (((uint64_t)cycles_high1 << 32) | cycles_low1);
-			// Print Memory Access Time 
-			//printf("%lu\n", time2-time1);
-		}*/
 		
 		
 		// Gives LLC Access Time
@@ -195,31 +166,28 @@ int main(int argc, char **argv) {
 
 			// Measured operation 
 			val=*slice;
-			//_mm_clflush(slice);
-			//_mm_prefetch(slice, _MM_HINT_T2);
+			//Uncomment if you want to measure memory access
+			
+
 			asm volatile ("RDTSCP\n\t"
 				"shl $32,%%rdx; "
 				"or %%rdx,%%rax"
 				: "=a"(time2)
 				:
 				: "rcx", "rdx");
-			
-			//_mm_clflush(&slice[1]);
-			
-			//_mm_prefetch(slice, _MM_HINT_T2);
-			//_mm_prefetch(&slice[1], _MM_HINT_T2);
-			//_mm_prefetch(&slice[2], _MM_HINT_T2);
-			//_mm_prefetch(&slice[4], _MM_HINT_T2);
-			//_mm_prefetch(&slice[8], _MM_HINT_T2);
-			/* Print LLC Access Time */
+			_mm_clflush(slice);
+			// Record LLC Access Time
 			times[cnt] = time1;
 			accesstimes[cnt++] = time2-time1;
 		}
 
 	}
+	float avg = 0;
 	for (k = 0; k<cnt; k++){
+		avg += accesstimes[k];
 		fprintf(logfp, "core%dToSlice%d,\t %lu, \t %lu\n", coreID, desiredSlice, times[k], accesstimes[k]);
 	}
+	printf("Core %d to Slice %d avg: %f\n",coreID, desiredSlice, avg/cnt);
 	/* Free the buffers */
 	free_buffer(buffer);
 	free(totalChunks);
