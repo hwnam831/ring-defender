@@ -27,8 +27,9 @@ class ResBlock(nn.Module):
         return out
 
 class CNNModel(nn.Module):
-    def __init__(self, threshold, drop=0.2):
+    def __init__(self, threshold, drop=0.1):
         super().__init__()
+
         self.CNN = nn.Sequential(
             nn.Conv1d(1, 32, 11, 1, 5),
             nn.Dropout(drop),
@@ -59,39 +60,77 @@ class CNNModel(nn.Module):
         return out
 
 class CNNGenerator(nn.Module):
-    def __init__(self, threshold, drop=0.2):
+    def __init__(self, threshold, window=32, drop=0.2):
         super().__init__()
-        self.CNN = nn.Sequential(
-            nn.Conv1d(1, 32, 11, 1, 5),
-            nn.Dropout(drop),
+        self.encoder = nn.Sequential(
+            nn.Conv1d(window, 64, 1, bias=True),
             nn.ReLU(),
-            ResBlock(32, 16),
-            nn.Conv1d(32, 64, 5, 1, 2),
-            nn.Dropout(drop),
+            nn.Conv1d(64, 128, 1, bias=True),
             nn.ReLU(),
-            #nn.MaxPool1d(2),
-            ResBlock(64, 32),
-            nn.Conv1d(64, 128, 5, 1, 2),
-            nn.Dropout(drop),
-            nn.ReLU(),
-            #nn.MaxPool1d(2),
+            nn.Dropout(drop)
         )
+        
+        self.resblock = nn.Sequential(
+                nn.Conv1d(128, 64, 1, bias=True),
+                nn.ReLU(),
+                #nn.ConstantPad1d((2,0),0.0),
+                nn.Conv1d(64, 128, 1, bias=True),
+                nn.ReLU(),
+                nn.Dropout(drop)
+            )
+
+        self.decoder = nn.Sequential(
+            nn.Conv1d(128, 1, 1, bias=True),
+            nn.ReLU(),
+        )
+
     def forward(self, x):
-        out = self.CNN(x.view(x.size(0),1,x.size(1)))
-        out = self.FC(out.view(out.size(0),-1))
-        return out
+        out = self.encoder(x)
+        out = out + self.resblock(out)
+        out = self.decoder(out)
+        return out.view(out.size(0),-1)
+
+class RNNGenerator(nn.Module):
+    def __init__(self, threshold, window=32, drop=0.2):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv1d(window, 128, 1),
+            nn.Dropout(drop)
+        )
+        
+        self.resblock = nn.GRU(128,128, num_layers=2, batch_first=True, dropout=drop)
+
+        self.decoder = nn.Sequential(
+            nn.Linear(128, 1),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        out = self.encoder(x).permute(0,2,1) #N,C,S
+        res, _ = self.resblock(out)
+        out = out + res #N,S,C
+        out = self.decoder(out)
+        return out.view(out.size(0),-1)
+
+def shifter(arr, window=32):
+    dup = arr[:,None,:].expand(arr.size(0), arr.size(1)+1, arr.size(1))
+    dup2 = dup.reshape(arr.size(0), arr.size(1), arr.size(1)+1)
+    shifted = dup2[:,:window,:-window]
+    return shifted
 
 if __name__ == '__main__':
     threshold = 42
-    epochs = 50
-    dim=512
+    epochs = 30
+    dim=128
     dataset = RingDataset.RingDataset('core4ToSlice3.pkl', threshold=threshold)
-    testlen = dataset.__len__()//4
-    trainlen = dataset.__len__() - testlen
-    testset, trainset = random_split(dataset, [testlen, trainlen], generator=torch.Generator().manual_seed(17))
+    testset =  RingDataset.RingDataset('core4ToSlice3_test.pkl', threshold=threshold)
+    #testlen = dataset.__len__()//4
+    #trainlen = dataset.__len__() - testlen
+    #testset, trainset = random_split(dataset, [testlen, trainlen], generator=torch.Generator().manual_seed(17))
     #testset, trainset = random_split(dataset, [testlen, trainlen])
-    trainloader = DataLoader(trainset, batch_size=16, num_workers=2)
-    testloader = DataLoader(testset, batch_size=32)
+    trainset=dataset
+    trainloader = DataLoader(trainset, batch_size=64, num_workers=2)
+    testloader = DataLoader(testset, batch_size=64)
     MLP = nn.Sequential(
         nn.Linear(threshold,dim//2),
         nn.ReLU(),
@@ -104,27 +143,101 @@ if __name__ == '__main__':
         nn.Dropout(0.25),
         nn.Linear(dim,2)
     ).cuda()
+    MLPgen = nn.Sequential(
+        nn.Linear(threshold,dim//2),
+        nn.ReLU(),
+        nn.Dropout(0.25),
+        nn.Linear(dim//2,dim),
+        nn.ReLU(),
+        nn.Linear(dim,dim),
+        nn.ReLU(),
+        nn.Dropout(0.25),
+        nn.Linear(dim,threshold),
+        nn.ReLU()
+    ).cuda()
     cnn = CNNModel(threshold).cuda()
-    model = cnn
-    optimizer = torch.optim.Adam(model.parameters(), lr=3e-5)
+    #gen = CNNGenerator(threshold).cuda()
+    gen=RNNGenerator(threshold).cuda()
+    #gen=MLPgen
+    '''
+    for x,y in trainloader:
+        xp = gen(x.cuda())
+        print(x.shape)
+        print(xp.shape)
+        break
+    '''
+    classifier = cnn
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=2e-5)
+    optim_g = torch.optim.Adam(gen.parameters(), lr=4e-5)
+
     criterion = nn.CrossEntropyLoss()
-    for e in range(epochs):
+    C = 20.0
+    repeat=2
+    warmup = 5
+
+    for e in range(warmup):
+        classifier.train()
         for x,y in trainloader:
-            optimizer.zero_grad()
-            model.train()
-            output = model(x.cuda())
-            loss = criterion(output, y.cuda())
+            xdata, ydata = x.cuda(), y.cuda()
+            #train classifier
+            optim_c.zero_grad()
+            #interleaving?
+            output = classifier(xdata[:,31:])
+            loss_c = criterion(output, ydata)
+            loss_c.backward()
+            optim_c.step()
+
+    for e in range(epochs):
+        gen.train()
+        classifier.train()
+        for x,y in trainloader:
+            xdata, ydata = x.cuda(), y.cuda()
+            shifted = shifter(xdata)
+            #train classifier
+            optim_c.zero_grad()
+            perturb = gen(shifted).view(shifted.size(0),-1)
+            #perturb = gen(xdata[:,31:])
+            #interleaving?
+            output = classifier(xdata[:,31:]+perturb.detach())
+            loss_c = criterion(output, ydata)
+            loss_c.backward()
+            optim_c.step()
+
+            #train generator
+            optim_g.zero_grad()
+            perturb = gen(shifted).view(shifted.size(0),-1)
+            #perturb = gen(xdata[:,31:])
+            output = classifier(xdata[:,31:] + perturb)
+            pnorm = torch.norm(perturb, dim=-1) - C
+            loss_p = torch.mean(torch.relu(pnorm))
+            #loss_p = torch.mean(torch.norm(perturb,dim=-1))
+            fake_target = 1-ydata
+            loss_adv1 = criterion(output, fake_target)
+            loss_adv0 = criterion(output, ydata)
+            loss = loss_adv1 + 0.0005*loss_p
+            #loss = loss_adv1
             loss.backward()
-            optimizer.step()
+            optim_g.step()
+
         mloss = 0.0
         macc = 0.0
-        for x,y in testloader:
-            model.eval()
-            output = model(x.cuda())
-            loss = criterion(output, y.cuda())
-            pred = output.argmax(axis=-1)
-            mloss += loss.item()/len(testloader)
-            macc += ((pred==y.cuda()).sum().float()/pred.nelement()).item()/len(testloader)
-        print("epoch {} \t acc {:.6f}\t loss {:.6f}\n".format(e+1, macc, mloss))
+        mnorm = 0.0
+        #evaluate classifier
+        with torch.no_grad():
+            classifier.eval()
+            gen.eval()
+            for x,y in testloader:
+                xdata, ydata = x.cuda(), y.cuda()
+                shifted = shifter(xdata)
+                perturb = gen(shifted).view(shifted.size(0),-1)
+                #perturb = gen(xdata[:,31:])
+                norm = torch.mean(perturb)
+                output = classifier(xdata[:,31:]+perturb)
+                loss_c = criterion(output, ydata)
+                pred = output.argmax(axis=-1)
+                mnorm += norm.item()/len(testloader)
+                mloss += loss_c.item()/len(testloader)
+                macc += ((pred==ydata).sum().float()/pred.nelement()).item()/len(testloader)
+            print("epoch {} \t acc {:.6f}\t loss {:.6f}\t Avg perturb {:.6f}\n".format(e+1, macc, mloss, mnorm))
 
 

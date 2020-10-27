@@ -1,5 +1,6 @@
 import pandas as pd
 import pickle
+import numpy as np
 
 attacklog = pd.read_csv('./attack.log')
 victimlog = pd.read_csv('./pow.log')
@@ -19,9 +20,15 @@ for idx in victimlog.index:
     istart = victimlog['time'][idx]
     #duration = victimlog['iteration'][idx]
     trace = af.loc[(af['time'] > istart) & (af['time'] < istart + duration)]['accesstime']
-    #print(len(trace))
     bit = victimlog['bit'][idx]
-    traces.append((bit, trace))
+    if len(trace) > 0:
+        pvt = af.index.get_loc(trace.index[0])
+        pred = af.iloc[pvt-31:pvt]['accesstime'].to_numpy()
+    #print(len(trace))
+    
+        traces.append((bit, np.concatenate((pred,trace.to_numpy()))))
+    else:
+        traces.append((bit, trace.to_numpy()))
 print(attacklog['direction'][1])
 
 datalist = []
