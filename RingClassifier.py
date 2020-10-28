@@ -112,6 +112,23 @@ class RNNGenerator(nn.Module):
         out = self.decoder(out)
         return out.view(out.size(0),-1)
 
+class GaussianGenerator(nn.Module):
+    def __init__(self, threshold, scale=40, window=32, drop=0.2):
+        super().__init__()
+        self.bias = nn.Parameter(torch.zeros(threshold,dtype=torch.float))
+        self.scale = nn.Parameter(torch.ones(1, dtype=torch.float)*scale)
+    def forward(self,x):
+        #assuming N,C,S
+        perturb = torch.randn([x.size(0), threshold], device=x.device) #[N, S]
+        perturb = perturb*self.scale + self.bias
+        return torch.relu(perturb)
+
+
+
+
+    
+
+
 def shifter(arr, window=32):
     dup = arr[:,None,:].expand(arr.size(0), arr.size(1)+1, arr.size(1))
     dup2 = dup.reshape(arr.size(0), arr.size(1), arr.size(1)+1)
@@ -120,7 +137,7 @@ def shifter(arr, window=32):
 
 if __name__ == '__main__':
     threshold = 42
-    epochs = 30
+    epochs = 50
     dim=128
     dataset = RingDataset.RingDataset('core4ToSlice3.pkl', threshold=threshold)
     testset =  RingDataset.RingDataset('core4ToSlice3_test.pkl', threshold=threshold)
@@ -157,7 +174,8 @@ if __name__ == '__main__':
     ).cuda()
     cnn = CNNModel(threshold).cuda()
     #gen = CNNGenerator(threshold).cuda()
-    gen=RNNGenerator(threshold).cuda()
+    #gen=RNNGenerator(threshold).cuda()
+    gen = GaussianGenerator(threshold).cuda()
     #gen=MLPgen
     '''
     for x,y in trainloader:
