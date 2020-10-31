@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
 import torch.nn as nn
 
+
 def ConvBlockRelu(c_in, c_out, ksize, dilation=1):
     pad = ((ksize-1)//2)*dilation
     return nn.Sequential(
@@ -90,43 +91,60 @@ class CNNGenerator(nn.Module):
         out = self.decoder(out)
         return out.view(out.size(0),-1)
 
+class GaussianGenerator(nn.Module):
+    def __init__(self, threshold, scale=1, window=32, drop=0.2):
+        super().__init__()
+        self.bias = nn.Parameter(torch.randn(threshold,dtype=torch.float))
+        self.scale = nn.Parameter(torch.ones(1, dtype=torch.float)*scale)
+    def forward(self,x):
+        #assuming N,C,S
+        perturb = torch.randn([x.size(0), threshold], device=x.device) #[N, S]
+        perturb = perturb*self.scale + self.bias
+        return perturb
+
+
+class GaussianSinusoid(nn.Module):
+    def __init__(self, threshold, scale=1, window=32, drop=0.2):
+        super().__init__()
+        self.bias = nn.Parameter(torch.randn(threshold,dtype=torch.float))
+        self.amp = nn.Parameter(torch.ones(1, dtype=torch.float)*scale)
+        self.freq = nn.Parameter(torch.ones(1,dtype=torch.float)/(threshold/8))
+        self.scale = nn.Parameter(torch.ones(1, dtype=torch.float)*scale)
+        self.threshold=threshold
+    def forward(self,x):
+        #assuming N,C,S
+        noise = self.scale*torch.randn([x.size(0), self.threshold], device=x.device) #[N, S]
+        omega = 2*np.pi*self.freq
+        t = torch.arange(self.threshold, device=x.device, dtype=torch.float)
+        theta = torch.randn(x.size(0),device=x.device)*(2*np.pi)
+        sinu = self.amp*torch.sin((omega*t)[None,:] + theta[:,None])
+        perturb = sinu[None,:] + noise + self.bias
+        return perturb
+
 class RNNGenerator(nn.Module):
     def __init__(self, threshold, window=32, drop=0.2):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Conv1d(window, 128, 1),
+            nn.Linear(window, 128),
             nn.Dropout(drop)
         )
         
         self.resblock = nn.GRU(128,128, num_layers=2, batch_first=True, dropout=drop)
 
         self.decoder = nn.Sequential(
-            nn.Linear(128, 1),
-            nn.ReLU(),
+            nn.Linear(128, 1)
         )
+        self.scale = nn.Parameter(torch.ones(1))
+        self.noise = GaussianSinusoid(threshold)
 
     def forward(self, x):
-        out = self.encoder(x).permute(0,2,1) #N,C,S
+        out = self.encoder(x.permute(0,2,1)) #N,C,S -> N,S,C
         res, _ = self.resblock(out)
         out = out + res #N,S,C
         out = self.decoder(out)
-        return out.view(out.size(0),-1)
-
-class GaussianGenerator(nn.Module):
-    def __init__(self, threshold, scale=40, window=32, drop=0.2):
-        super().__init__()
-        self.bias = nn.Parameter(torch.zeros(threshold,dtype=torch.float))
-        self.scale = nn.Parameter(torch.ones(1, dtype=torch.float)*scale)
-    def forward(self,x):
-        #assuming N,C,S
-        perturb = torch.randn([x.size(0), threshold], device=x.device) #[N, S]
-        perturb = perturb*self.scale + self.bias
-        return torch.relu(perturb)
-
-
-
-
-    
+        gaussian = self.scale*torch.randn_like(out)
+        out = torch.relu(out + gaussian)
+        return out.view(out.size(0),-1)    
 
 
 def shifter(arr, window=32):
@@ -174,8 +192,17 @@ if __name__ == '__main__':
     ).cuda()
     cnn = CNNModel(threshold).cuda()
     #gen = CNNGenerator(threshold).cuda()
-    #gen=RNNGenerator(threshold).cuda()
-    gen = GaussianGenerator(threshold).cuda()
+    gen=RNNGenerator(threshold).cuda()
+    GG = nn.Sequential(
+        GaussianGenerator(threshold, scale=20),
+        nn.ReLU(),
+    ).cuda()
+    
+    GS = nn.Sequential(
+        GaussianSinusoid(threshold, scale=20),
+        nn.ReLU(),
+    ).cuda()
+    #gen = GS
     #gen=MLPgen
     '''
     for x,y in trainloader:
@@ -189,9 +216,10 @@ if __name__ == '__main__':
     optim_g = torch.optim.Adam(gen.parameters(), lr=4e-5)
 
     criterion = nn.CrossEntropyLoss()
-    C = 20.0
+    C = 40.0
     repeat=2
     warmup = 5
+    scale = 0.001
 
     for e in range(warmup):
         classifier.train()
@@ -232,7 +260,7 @@ if __name__ == '__main__':
             fake_target = 1-ydata
             loss_adv1 = criterion(output, fake_target)
             loss_adv0 = criterion(output, ydata)
-            loss = loss_adv1 + 0.0005*loss_p
+            loss = loss_adv1 + scale*loss_p
             #loss = loss_adv1
             loss.backward()
             optim_g.step()
