@@ -1,32 +1,6 @@
-python RingClassifier.py --gen adv --amp 2 > exp/adv_2.log
-python RingClassifier.py --gen adv --amp 4 > exp/adv_4.log
-python RingClassifier.py --gen adv --amp 6 > exp/adv_6.log
-python RingClassifier.py --gen adv --amp 8 > exp/adv_8.log
-python RingClassifier.py --gen adv --amp 10 > exp/adv_10.log
-python RingClassifier.py --gen adv --amp 12 > exp/adv_12.log
-python RingClassifier.py --gen adv --amp 14 > exp/adv_14.log
-python RingClassifier.py --gen adv --amp 16 > exp/adv_16.log
-python RingClassifier.py --gen adv --amp 18 > exp/adv_18.log
-python RingClassifier.py --gen adv --amp 20 > exp/adv_20.log
-
-python RingClassifier.py --gen gau --amp 2 > exp/gau_2.log
-python RingClassifier.py --gen gau --amp 4 > exp/gau_4.log
-python RingClassifier.py --gen gau --amp 6 > exp/gau_6.log
-python RingClassifier.py --gen gau --amp 8 > exp/gau_8.log
-python RingClassifier.py --gen gau --amp 10 > exp/gau_10.log
-python RingClassifier.py --gen gau --amp 12 > exp/gau_12.log
-python RingClassifier.py --gen gau --amp 14 > exp/gau_14.log
-python RingClassifier.py --gen gau --amp 16 > exp/gau_16.log
-python RingClassifier.py --gen gau --amp 18 > exp/gau_18.log
-python RingClassifier.py --gen gau --amp 20 > exp/gau_20.log
-
-python RingClassifier.py --gen sin --amp 2 > exp/sin_2.log
-python RingClassifier.py --gen sin --amp 4 > exp/sin_4.log
-python RingClassifier.py --gen sin --amp 6 > exp/sin_6.log
-python RingClassifier.py --gen sin --amp 8 > exp/sin_8.log
-python RingClassifier.py --gen sin --amp 10 > exp/sin_10.log
-python RingClassifier.py --gen sin --amp 12 > exp/sin_12.log
-python RingClassifier.py --gen sin --amp 14 > exp/sin_14.log
-python RingClassifier.py --gen sin --amp 16 > exp/sin_16.log
-python RingClassifier.py --gen sin --amp 18 > exp/sin_18.log
-python RingClassifier.py --gen sin --amp 20 > exp/sin_20.log
+echo $1
+python RingClassifier.py --gen $1 --amp 1 > exp/$1_1.log
+python RingClassifier.py --gen $1 --amp 2 > exp/$1_2.log
+python RingClassifier.py --gen $1 --amp 3 > exp/$1_3.log
+python RingClassifier.py --gen $1 --amp 4 > exp/$1_4.log
+python RingClassifier.py --gen $1 --amp 5 > exp/$1_5.log

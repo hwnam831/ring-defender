@@ -38,5 +38,9 @@ try:
 except:
     pass
 datalist.append(traces)
+totlen = 0
+for t in datalist:
+    totlen += len(t)
+print(totlen)
 with open(attacklog['direction'][1]+'.pkl','wb') as f: 
     pickle.dump(datalist, f)
