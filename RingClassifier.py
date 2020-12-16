@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
 import torch.nn as nn
 import re
-
+import time
 
  
 
@@ -171,6 +171,7 @@ if __name__ == '__main__':
     for e in range(args.epochs):
         gen.train()
         classifier.train()
+        trainstart = time.time()
         for x,y in trainloader:
             xdata, ydata = x.cuda(), y.cuda()
             shifted = shifter(xdata)
@@ -244,7 +245,7 @@ if __name__ == '__main__':
                 totcorrect += (pred==ydata).sum().item()
                 totcount += y.size(0)
             macc = float(totcorrect)/totcount
-            print("epoch {} \t acc {:.6f}\t loss {:.6f}\t Avg perturb {:.6f}\n".format(e+1, macc, mloss, mnorm))
+            print("epoch {} \t acc {:.4f}\t loss {:.4f}\t Avg perturb {:.4f}\t duration {:.4f}\n".format(e+1, macc, mloss, mnorm, time.time()-trainstart))
             if e > (args.epochs*4)//5 and macc - 0.5 < 0.001:
                 break
     gen.eval()
