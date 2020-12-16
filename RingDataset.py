@@ -39,7 +39,8 @@ class RingDataset(Dataset):
         while(std2 < std):
             std2 = std2*2
         std2 = std2 if (std2-std) < (std-std2//2) else std2//2
-
+        self.med = median
+        self.std = std2
         self.input_arr = self.input_arr - median
         self.input_arr = self.input_arr/std2
     

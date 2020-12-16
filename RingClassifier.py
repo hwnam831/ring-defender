@@ -70,7 +70,7 @@ def get_args():
     parser.add_argument(
             "--amp",
             type=float,
-            default='12',
+            default='2',
             help='noise amp scale')
 
     return parser.parse_args()
@@ -94,9 +94,9 @@ if __name__ == '__main__':
     #testset, trainset = random_split(dataset, [testlen, trainlen], generator=torch.Generator().manual_seed(17))
     #testset, trainset = random_split(dataset, [testlen, trainlen])
     trainset=dataset
-    trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4)
+    trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
     testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
-    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4)
+    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
     
     if args.gen == 'gau':
         gen = nn.Sequential(
@@ -114,7 +114,7 @@ if __name__ == '__main__':
         gen=RNNGenerator(args.threshold, scale=0.25, dim=args.dim).cuda()
         if os.path.isfile('./models/best_{}_{}.pth'.format(args.gen, args.dim)):
             print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format(args.gen, args.dim)))
+            #gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format(args.gen, args.dim)))
     elif args.gen == 'off':
         gen=OffsetGenerator(args.threshold, scale=args.amp/2).cuda()
     else:
@@ -308,7 +308,6 @@ if __name__ == '__main__':
     print("Last 10 acc: {:.6f}\t perturb: {:.6f}".format(lastacc,lastnorm))
     if args.gen == 'adv':
         filename = "adv_{}_{:.3f}_{:.3f}.pth".format(args.dim,lastnorm, lastacc)
-        torch.save(gen.state_dict(), './models/'+filename)
         os.walk('models')
         flist = os.listdir()
         best = 1.0
@@ -320,4 +319,5 @@ if __name__ == '__main__':
                 if facc <= best:
                     best = facc
         if lastacc <= best:
+            torch.save(gen.state_dict(), './models/'+filename)
             torch.save(gen.state_dict(), './models/'+'best_{}_{}.pth'.format(args.gen, args.dim))

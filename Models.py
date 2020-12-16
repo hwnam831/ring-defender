@@ -53,10 +53,14 @@ class CNNModel(nn.Module):
             nn.Conv1d(64, 128, 5, 2, 2),
             nn.Dropout(drop),
             nn.ReLU(),
+            ResBlock(128, 64),
+            nn.Conv1d(128, 256, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
             #nn.MaxPool1d(2),
         )
         self.FC = nn.Sequential(
-            nn.Linear(128*((threshold+3)//4), 512),
+            nn.Linear(256*((threshold+3)//4), 512),
             nn.Dropout(drop),
             nn.ReLU(),
             nn.Linear(512,512),
@@ -106,7 +110,7 @@ class CNNModel2(nn.Module):
         return out
 
 class RNNModel(nn.Module):
-    def __init__(self, threshold, dim=128, drop=0.1):
+    def __init__(self, threshold, dim=256, drop=0.1):
         super().__init__()
 
         self.CNN = nn.Sequential(
@@ -117,6 +121,9 @@ class RNNModel(nn.Module):
             nn.Dropout(drop),
             nn.ReLU(),
             #nn.MaxPool1d(2),
+            nn.Conv1d(64, 128, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
             nn.Conv1d(64, 128, 5, 2, 2),
             nn.Dropout(drop),
             nn.ReLU(),
