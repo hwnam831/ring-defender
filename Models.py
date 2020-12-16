@@ -267,7 +267,7 @@ class RNNGenerator(nn.Module):
         out = out + res #N,S,C
         out = self.decoder(out).view(out.size(0),-1)
         #out = out + self.scale*torch.randn_like(out)
-        out = out + noise
+        #out = out + noise
         
         return torch.relu(out)   
 
