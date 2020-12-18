@@ -274,8 +274,47 @@ class RNNGenerator(nn.Module):
         else: 
             return torch.relu(out+noise)
 
+class RNNGenerator2(nn.Module):
+    def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv1d(1, dim, window),
+            nn.Dropout(drop)
+        )
+
+        self.resblock = nn.GRU(dim,dim, num_layers=2, batch_first=True, dropout=drop)
+
+        self.decoder = nn.Sequential(
+            nn.Linear(dim, 1)
+        )
+        self.scale = nn.Parameter(torch.ones(1)*scale)
+        self.noise = GaussianSinusoid(threshold)
+        self.window=window
+
+    def forward(self, x, distill=False): #N, 
+        signal = x[:,self.window-1:]
+        #noise = torch.ones_like(signal)*self.scale #offset
+        noise = self.scale*torch.randn_like(signal) #gaussian
+        
+        #noise = torch.relu(noise - signal) #Maya-like
+        #x[:,-1,:] += noise
+        #xx = x + shifter(noise)
+        #xx = x
+        encoded = self.encoder(x.view(x.size(0),1,-1)).permute(0,2,1) #N,C,S -> N,S,C
+        
+        res, _ = self.resblock(encoded)
+        out = encoded + res #N,S,C
+        out = self.decoder(out).view(out.size(0),-1)
+        #out = out + self.scale*torch.randn_like(out)
+        #out = out + noise
+        
+        if distill:
+            return torch.relu(out+noise), (encoded, res, out)
+        else: 
+            return torch.relu(out+noise)
+
 class Distiller(nn.Module):
-    def __init__(self, threshold, tdim=256, sdim=32, lamb_d = 0.1, lamb_r = 0.1, window=32):
+    def __init__(self, threshold, tdim=256, sdim=32, lamb_d = 1.0, lamb_r = 1.0, window=32):
         super().__init__()
         self.map1 = nn.Linear(sdim, tdim)
         self.map2 = nn.Linear(sdim, tdim)
@@ -290,8 +329,8 @@ class Distiller(nn.Module):
 
         enc_t, res_t, out_t = t_out
         
-        l_distill = self.criterion(enc_s2, enc_t) + self.criterion(res_s2, res_t)
-        l_recon = self.criterion(out_s, out_t)
+        l_distill = self.criterion(enc_s2, enc_t.detach()) + self.criterion(res_s2, res_t.detach())
+        l_recon = self.criterion(out_s, out_t.detach())
         return self.lamb_d*l_distill + self.lamb_r*l_recon
 
 def MLP(threshold, dim):

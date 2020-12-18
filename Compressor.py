@@ -37,7 +37,7 @@ def get_args():
     parser.add_argument(
             "--epochs",
             type=int,
-            default='150',
+            default='10',
             help='number of epochs')
     parser.add_argument(
             "--file_prefix",
@@ -119,7 +119,7 @@ if __name__ == '__main__':
     sched_d   = torch.optim.lr_scheduler.StepLR(optim_d, 1, gamma=gamma)
     criterion = nn.CrossEntropyLoss()
     warmup = 10
-    cooldown = 50
+    cooldown = 30
     scale = 0.001
     #gen.eval()
     classifier.train()
@@ -179,7 +179,7 @@ if __name__ == '__main__':
 
             loss_adv1 = criterion(output, fake_target)
 
-            loss = loss_adv1 + loss_comp
+            loss = 0.1*loss_adv1 + loss_comp
 
             loss.backward()
             optim_g.step()
@@ -229,11 +229,13 @@ if __name__ == '__main__':
             print("epoch {} \t acc {:.4f}\t loss {:.4f}\t Avg perturb {:.4f}\t duration {:.4f}\n".format(e+1, macc, mloss, mnorm, time.time()-trainstart))
             if e > (args.epochs*4)//5 and macc - 0.5 < 0.001:
                 break
-    gen.eval()
+
     lastacc = 0.0
     lastnorm = 0.0
     optim_c2 = torch.optim.Adam(classifier_test.parameters(), lr=args.lr)
     sched_c2   = torch.optim.lr_scheduler.StepLR(optim_c2, 1, gamma=gamma)
+    halfstudent = student.half()
+    #halfstudent.eval()
     for e in range(cooldown):
         classifier_test.train()
         for x,y in valloader:
@@ -241,10 +243,10 @@ if __name__ == '__main__':
             shifted = shifter(xdata)
             #train classifier
             optim_c2.zero_grad()
-            perturb = gen(shifted).view(shifted.size(0),-1)
+            perturb = halfstudent(shifted.half()).view(shifted.size(0),-1)
             #perturb = gen(xdata[:,31:])
             #interleaving?
-            output = classifier_test(xdata[:,31:]+perturb.detach())
+            output = classifier_test(xdata[:,31:]+perturb.detach().float())
             loss_c = criterion(output, ydata)
             loss_c.backward()
             optim_c2.step()
@@ -259,16 +261,17 @@ if __name__ == '__main__':
         onecorrect = 0
         onecount = 0
         #evaluate classifier
+        
         with torch.no_grad():
             classifier_test.eval()
             for x,y in testloader:
                 xdata, ydata = x.cuda(), y.cuda()
                 shifted = shifter(xdata)
-                perturb = gen(shifted).view(shifted.size(0),-1)
+                perturb = halfstudent(shifted.half()).view(shifted.size(0),-1)
                 perturb = quantizer(perturb)
                 #perturb = gen(xdata[:,31:])
                 norm = torch.mean(perturb)
-                output = classifier_test(xdata[:,31:]+perturb)
+                output = classifier_test(xdata[:,31:]+perturb.float())
                 loss_c = criterion(output, ydata)
                 pred = output.argmax(axis=-1)
                 mnorm += norm.item()/len(testloader)
@@ -300,5 +303,5 @@ if __name__ == '__main__':
                 best = facc
     if lastacc <= best:
         print('New best found')
-        torch.save(gen.state_dict(), './models/'+filename)
-        torch.save(gen.state_dict(), './models/'+'best_cmp_{}.pth'.format(args.student))
+        torch.save(student.state_dict(), './models/'+filename)
+        torch.save(student.state_dict(), './models/'+'best_cmp_{}.pth'.format(args.student))
