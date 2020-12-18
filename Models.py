@@ -249,10 +249,10 @@ class RNNGenerator(nn.Module):
         self.decoder = nn.Sequential(
             nn.Linear(dim, 1)
         )
-        self.scale = nn.Parameter(torch.ones(1))
+        self.scale = nn.Parameter(torch.ones(1)*scale)
         self.noise = GaussianSinusoid(threshold)
 
-    def forward(self, x):
+    def forward(self, x, distill=False):
         signal = x[:,-1,:]
         #noise = torch.ones_like(signal)*self.scale #offset
         noise = self.scale*torch.randn_like(signal) #gaussian
@@ -261,15 +261,38 @@ class RNNGenerator(nn.Module):
         #x[:,-1,:] += noise
         #xx = x + shifter(noise)
         #xx = x
-        out = self.encoder(x.permute(0,2,1)) #N,C,S -> N,S,C
+        encoded = self.encoder(x.permute(0,2,1)) #N,C,S -> N,S,C
         
-        res, _ = self.resblock(out)
-        out = out + res #N,S,C
+        res, _ = self.resblock(encoded)
+        out = encoded + res #N,S,C
         out = self.decoder(out).view(out.size(0),-1)
         #out = out + self.scale*torch.randn_like(out)
         #out = out + noise
         
-        return torch.relu(out)   
+        if distill:
+            return torch.relu(out+noise), (encoded, res, out)
+        else: 
+            return torch.relu(out+noise)
+
+class Distiller(nn.Module):
+    def __init__(self, threshold, tdim=256, sdim=32, lamb_d = 0.1, lamb_r = 0.1, window=32):
+        super().__init__()
+        self.map1 = nn.Linear(sdim, tdim)
+        self.map2 = nn.Linear(sdim, tdim)
+        self.criterion = nn.MSELoss()
+        self.lamb_d = lamb_d
+        self.lamb_r = lamb_r
+
+    def forward(self, s_out, t_out):
+        enc_s, res_s, out_s = s_out
+        enc_s2 = self.map1(enc_s)
+        res_s2 = self.map2(res_s)
+
+        enc_t, res_t, out_t = t_out
+        
+        l_distill = self.criterion(enc_s2, enc_t) + self.criterion(res_s2, res_t)
+        l_recon = self.criterion(out_s, out_t)
+        return self.lamb_d*l_distill + self.lamb_r*l_recon
 
 def MLP(threshold, dim):
         model = nn.Sequential(

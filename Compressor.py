@@ -1,5 +1,5 @@
 import RingDataset
-from Models import CNNModel, CNNGenerator, RNNModel, GaussianGenerator, GaussianSinusoid, RNNGenerator, MLP, OffsetGenerator
+from Models import CNNModel, RNNGenerator, Distiller, MLP, RNNModel
 import os
 import argparse
 import numpy as np
@@ -10,8 +10,6 @@ from torch.utils.data import random_split
 import torch.nn as nn
 import re
 import time
-
- 
 
 window=32 #this is fixed
 
@@ -31,12 +29,6 @@ def get_args():
             choices=['cnn', 'rnn', 'ff'],
             default='cnn',
             help='Test Classifier choices')
-    parser.add_argument(
-            "--gen",
-            type=str,
-            choices=['gau', 'sin', 'adv', 'off', 'cnn'],
-            default='adv',
-            help='Generator choices')
     parser.add_argument(
             "--threshold",
             type=int,
@@ -63,15 +55,15 @@ def get_args():
             default='256',
             help='internal channel dimension')
     parser.add_argument(
+            "--student",
+            type=int,
+            default='32',
+            help='student channel dimension')
+    parser.add_argument(
             "--lr",
             type=float,
             default=2e-5,
             help='Default learning rate')
-    parser.add_argument(
-            "--amp",
-            type=float,
-            default='2',
-            help='noise amp scale')
 
     return parser.parse_args()
 
@@ -94,30 +86,14 @@ if __name__ == '__main__':
     trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
     testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
-    
-    if args.gen == 'gau':
-        gen = nn.Sequential(
-        GaussianGenerator(args.threshold, scale=args.amp),
-        nn.ReLU(),
-        ).cuda()
-    elif args.gen == 'sin':
-        gen = nn.Sequential(
-        GaussianSinusoid(args.threshold, scale=args.amp),
-        nn.ReLU(),
-        ).cuda()
-    elif args.gen == 'cnn':
-        gen=CNNGenerator(args.threshold, scale=0.5).cuda()
-    elif args.gen == 'adv':
-        gen=RNNGenerator(args.threshold, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./models/best_{}_{}.pth'.format(args.gen, args.dim)):
-            print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format(args.gen, args.dim)))
-    elif args.gen == 'off':
-        gen=OffsetGenerator(args.threshold, scale=args.amp/2).cuda()
-    else:
-        print(args.gen + ' not supported\n')
-        exit(-1)
-    
+
+    gen=RNNGenerator(args.threshold, scale=0.25, dim=args.dim, drop=0.0).cuda()
+    assert os.path.isfile('./models/best_{}_{}.pth'.format('adv', args.dim))
+    gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format('adv', args.dim)))
+
+    student=RNNGenerator(args.threshold, scale=0.25, dim=args.student,  drop=0.0).cuda()
+    distiller = Distiller(args.threshold, args.dim, args.student).cuda()
+
     if args.net == 'ff':
         classifier = MLP(args.threshold, dim=args.dim).cuda()
     elif args.net == 'rnn':
@@ -132,34 +108,51 @@ if __name__ == '__main__':
     else:
         classifier_test = CNNModel(args.threshold, dim=args.dim).cuda()
 
-    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr)
+    optim_c = torch.optim.Adam(classifier.parameters())
     optim_c2 = torch.optim.Adam(classifier_test.parameters(), lr=args.lr)
-    optim_g = torch.optim.Adam(gen.parameters(), lr=args.lr*2)
+    optim_g = torch.optim.Adam(student.parameters())
+    optim_d = torch.optim.Adam(distiller.parameters())
     gamma = 0.97
     sched_c   = torch.optim.lr_scheduler.StepLR(optim_c, 1, gamma=gamma)
     sched_c2   = torch.optim.lr_scheduler.StepLR(optim_c2, 1, gamma=gamma)
     sched_g   = torch.optim.lr_scheduler.StepLR(optim_g, 1, gamma=gamma)
+    sched_d   = torch.optim.lr_scheduler.StepLR(optim_d, 1, gamma=gamma)
     criterion = nn.CrossEntropyLoss()
-    C = args.amp * 3
     warmup = 10
     cooldown = 50
     scale = 0.001
-
+    #gen.eval()
+    classifier.train()
+    student.train()
+    gen.train()
+    #warmup and distillation
     for e in range(warmup):
-        classifier.train()
+        mloss = 0.0
         for x,y in trainloader:
             xdata, ydata = x.cuda(), y.cuda()
             shifted = shifter(xdata)
             #train classifier
             optim_c.zero_grad()
-            perturb = gen(shifted).view(shifted.size(0),-1)
+            optim_g.zero_grad()
+            optim_d.zero_grad()
+            perturb, t_out = gen(shifted, distill=True)
+            perturb = perturb.view(shifted.size(0),-1)
             output = classifier(xdata[:,31:]+perturb.detach())
             loss_c = criterion(output, ydata)
+            _, s_out = student(shifted, distill=True)
+            loss_d = distiller(s_out, t_out)
+            mloss += loss_d.item()/len(trainloader)
+            loss_d.backward()
+            optim_g.step()
+            optim_d.step()
             loss_c.backward()
             optim_c.step()
-
+        print("Warmup {} \t Distill loss {:.4f}".format(e+1, mloss))
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr)
+    optim_g = torch.optim.Adam(student.parameters(), lr=args.lr*2)
+    optim_d = torch.optim.Adam(distiller.parameters(), lr=args.lr)
     for e in range(args.epochs):
-        gen.train()
+        student.train()
         classifier.train()
         trainstart = time.time()
         for x,y in trainloader:
@@ -167,41 +160,40 @@ if __name__ == '__main__':
             shifted = shifter(xdata)
             #train classifier
             optim_c.zero_grad()
-            perturb = gen(shifted).view(shifted.size(0),-1)
-            #perturb = quantizer(perturb)
-            #perturb = gen(xdata[:,31:])
-            #interleaving?
+            perturb, s_out = student(shifted, distill=True)
+            perturb = perturb.view(shifted.size(0),-1)
+
             output = classifier(xdata[:,31:]+perturb.detach())
             loss_c = criterion(output, ydata)
             loss_c.backward()
             optim_c.step()
 
-            #train generator
+            #train student
             optim_g.zero_grad()
-            #perturb = gen(shifted).view(shifted.size(0),-1)
-            #perturb = gen(xdata[:,31:])
+            optim_d.zero_grad()
+            _, t_out = gen(shifted, distill=True)
+            
             output = classifier(xdata[:,31:] + perturb)
-            #perturb = quantizer(perturb)
-            pnorm = torch.norm(perturb, dim=-1) - C
-            loss_p = torch.mean(torch.relu(pnorm))
-            #loss_p = torch.mean(torch.norm(perturb,dim=-1))
+            loss_comp = distiller(s_out, t_out)
             fake_target = 1-ydata
 
             loss_adv1 = criterion(output, fake_target)
-            loss = loss_adv1 + scale*loss_p
-            #loss = loss_adv1
+
+            loss = loss_adv1 + loss_comp
+
             loss.backward()
             optim_g.step()
+            optim_d.step()
         classifier_test.train()
-        gen.eval()
+        student.eval()
         for x,y in valloader:
             xdata, ydata = x.cuda(), y.cuda()
             shifted = shifter(xdata)
             #train classifier
             optim_c2.zero_grad()
-            perturb = gen(shifted).view(shifted.size(0),-1)
+            perturb = student(shifted).view(shifted.size(0),-1)
             perturb = quantizer(perturb)
-            #perturb = gen(xdata[:,31:])
+
             #interleaving?
             output = classifier_test(xdata[:,31:]+perturb.detach())
             loss_c = criterion(output, ydata)
@@ -221,7 +213,7 @@ if __name__ == '__main__':
             for x,y in testloader:
                 xdata, ydata = x.cuda(), y.cuda()
                 shifted = shifter(xdata)
-                perturb = gen(shifted).view(shifted.size(0),-1)
+                perturb = student(shifted).view(shifted.size(0),-1)
                 perturb = quantizer(perturb)
                 #perturb = gen(xdata[:,31:])
                 norm = torch.mean(perturb)
@@ -296,18 +288,17 @@ if __name__ == '__main__':
                 lastacc += macc/10
                 lastnorm += mnorm/10
     print("Last 10 acc: {:.6f}\t perturb: {:.6f}".format(lastacc,lastnorm))
-    if args.gen == 'adv':
-        filename = "adv_{}_{:.3f}_{:.3f}.pth".format(args.dim,lastnorm, lastacc)
-        flist = os.listdir('models')
-        best = 1.0
-        rp = re.compile(r"{}_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.gen,args.dim))
-        for fn in flist:
-            m = rp.match(fn)
-            if m:
-                facc = float(m.group(2))
-                if facc <= best:
-                    best = facc
-        if lastacc <= best:
-            print('New best found')
-            torch.save(gen.state_dict(), './models/'+filename)
-            torch.save(gen.state_dict(), './models/'+'best_{}_{}.pth'.format(args.gen, args.dim))
+    filename = "cmp_{}_{:.3f}_{:.3f}.pth".format(args.student,lastnorm, lastacc)
+    flist = os.listdir('models')
+    best = 1.0
+    rp = re.compile(r"cmp_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.student))
+    for fn in flist:
+        m = rp.match(fn)
+        if m:
+            facc = float(m.group(2))
+            if facc <= best:
+                best = facc
+    if lastacc <= best:
+        print('New best found')
+        torch.save(gen.state_dict(), './models/'+filename)
+        torch.save(gen.state_dict(), './models/'+'best_cmp_{}.pth'.format(args.student))
