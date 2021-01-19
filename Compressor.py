@@ -1,5 +1,5 @@
 import RingDataset
-from Models import CNNModel, RNNGenerator, Distiller, MLP, RNNModel
+from Models import CNNModel, RNNGenerator, Distiller, MLP, RNNModel, QGRU
 import os
 import argparse
 import numpy as np
@@ -52,12 +52,12 @@ def get_args():
     parser.add_argument(
             "--dim",
             type=int,
-            default='256',
+            default='64',
             help='internal channel dimension')
     parser.add_argument(
             "--student",
             type=int,
-            default='32',
+            default='16',
             help='student channel dimension')
     parser.add_argument(
             "--lr",
@@ -91,7 +91,7 @@ if __name__ == '__main__':
     assert os.path.isfile('./models/best_{}_{}.pth'.format('adv', args.dim))
     gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format('adv', args.dim)))
 
-    student=RNNGenerator(args.threshold, scale=0.25, dim=args.student,  drop=0.0).cuda()
+    student=QGRU(args.threshold, scale=0.25, dim=args.student,  drop=0.0).cuda()
     distiller = Distiller(args.threshold, args.dim, args.student).cuda()
 
     if args.net == 'ff':
@@ -291,10 +291,10 @@ if __name__ == '__main__':
                 lastacc += macc/10
                 lastnorm += mnorm/10
     print("Last 10 acc: {:.6f}\t perturb: {:.6f}".format(lastacc,lastnorm))
-    filename = "cmp_{}_{:.3f}_{:.3f}.pth".format(args.student,lastnorm, lastacc)
+    filename = "qgru_{}_{:.3f}_{:.3f}.pth".format(args.student,lastnorm, lastacc)
     flist = os.listdir('models')
     best = 1.0
-    rp = re.compile(r"cmp_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.student))
+    rp = re.compile(r"qgru_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.student))
     for fn in flist:
         m = rp.match(fn)
         if m:
@@ -304,4 +304,4 @@ if __name__ == '__main__':
     if lastacc <= best:
         print('New best found')
         torch.save(student.state_dict(), './models/'+filename)
-        torch.save(student.state_dict(), './models/'+'best_cmp_{}.pth'.format(args.student))
+        torch.save(student.state_dict(), './models/'+'best_qgru_{}.pth'.format(args.student))

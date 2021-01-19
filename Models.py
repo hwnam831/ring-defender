@@ -274,6 +274,49 @@ class RNNGenerator(nn.Module):
         else: 
             return torch.relu(out+noise)
 
+class QGRU(nn.Module):
+    def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(window, dim),
+            nn.Dropout(drop)
+        )
+
+        self.gru1 = nn.GRUCell(dim,dim)
+        self.gru2 = nn.GRUCell(dim,dim)
+
+        self.decoder = nn.Sequential(
+            nn.Linear(dim, 1)
+        )
+        self.scale = nn.Parameter(torch.ones(1)*scale)
+
+
+    def forward(self, x, distill=False):
+        signal = x[:,-1,:]
+
+        noise = self.scale*torch.randn_like(signal) #gaussian
+        
+        src = x.permute(2,0,1) # N,C,S -> S,N,C
+
+        encoded = self.encoder(src)
+        h1 = torch.zeros_like(encoded[0])
+        h2 = torch.zeros_like(encoded[0])
+        hiddens = []
+        for item in encoded:
+            h1 = self.gru1(item, h1)
+            h2 = self.gru2(h1, h2)
+            hiddens.append(h2)
+        res = torch.stack(hiddens)
+        out = encoded + res #S,N,C
+        out = self.decoder(out).view(out.size(0),-1)
+        out = out.permute(1,0)
+        #out = out + self.scale*torch.randn_like(out)
+        #out = out + noise
+        
+        if distill:
+            return torch.relu(out+noise), (encoded.permute(1,0,2), res.permute(1,0,2), out)
+        else: 
+            return torch.relu(out+noise)
 class RNNGenerator2(nn.Module):
     def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2):
         super().__init__()
