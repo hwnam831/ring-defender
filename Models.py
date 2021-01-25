@@ -73,6 +73,83 @@ class CNNModel(nn.Module):
         out = self.FC(out.view(out.size(0),-1))
         return out
 
+class CNNModelWide(nn.Module):
+    def __init__(self, threshold, dim=128, drop=0.1):
+        super().__init__()
+
+        self.CNN = nn.Sequential(
+            nn.Conv1d(1, 64, 11, 1, 5),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(64, 32),
+            nn.Conv1d(64, 128, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+            ResBlock(128, 64),
+            nn.Conv1d(128, 256, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(256, 128),
+            nn.Conv1d(256, 256, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+        )
+        self.FC = nn.Sequential(
+            nn.Linear(256*((threshold+3)//4), 1024),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            nn.Linear(1024,1024),
+            nn.ReLU(),
+            nn.Dropout(drop),
+            nn.Linear(1024,2)
+        )
+    def forward(self, x):
+        out = self.CNN(x.view(x.size(0),1,x.size(1)))
+        out = self.FC(out.view(out.size(0),-1))
+        return out
+
+class CNNModelDeep(nn.Module):
+    def __init__(self, threshold, dim=128, drop=0.1):
+        super().__init__()
+
+        self.CNN = nn.Sequential(
+            nn.Conv1d(1, 32, 11, 1, 5),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(32, 16),
+            ResBlock(32, 16),
+            nn.Conv1d(32, 64, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+            ResBlock(64, 32),
+            ResBlock(64, 32),
+            nn.Conv1d(64, 128, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(128, 64),
+            ResBlock(128, 64),
+            nn.Conv1d(128, 256, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+        )
+        self.FC = nn.Sequential(
+            nn.Linear(256*((threshold+3)//4), 512),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            nn.Linear(512,512),
+            nn.ReLU(),
+            nn.Dropout(drop),
+            nn.Linear(512,2)
+        )
+    def forward(self, x):
+        out = self.CNN(x.view(x.size(0),1,x.size(1)))
+        out = self.FC(out.view(out.size(0),-1))
+        return out
+
 class CNNModel2(nn.Module):
     def __init__(self, threshold, dim=128, drop=0.1):
         super().__init__()
@@ -121,9 +198,6 @@ class RNNModel(nn.Module):
             nn.Dropout(drop),
             nn.ReLU(),
             #nn.MaxPool1d(2),
-            nn.Conv1d(64, 128, 5, 2, 2),
-            nn.Dropout(drop),
-            nn.ReLU(),
             nn.Conv1d(64, 128, 5, 2, 2),
             nn.Dropout(drop),
             nn.ReLU(),
