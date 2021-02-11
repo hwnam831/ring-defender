@@ -1,5 +1,5 @@
 import RingDataset
-from Models import CNNModel, RNNGenerator, Distiller, MLP, RNNModel, QGRU
+from Models import CNNModel, RNNGenerator2, Distiller, MLP, RNNModel, QGRU, QGRU2
 import os
 import argparse
 import numpy as np
@@ -37,7 +37,7 @@ def get_args():
     parser.add_argument(
             "--epochs",
             type=int,
-            default='10',
+            default='20',
             help='number of epochs')
     parser.add_argument(
             "--file_prefix",
@@ -52,7 +52,7 @@ def get_args():
     parser.add_argument(
             "--dim",
             type=int,
-            default='64',
+            default='128',
             help='internal channel dimension')
     parser.add_argument(
             "--student",
@@ -87,12 +87,12 @@ if __name__ == '__main__':
     testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
 
-    gen=RNNGenerator(args.threshold, scale=0.25, dim=args.dim, drop=0.0).cuda()
+    gen=RNNGenerator2(args.threshold, scale=0.25, dim=args.dim, drop=0.0).cuda()
     assert os.path.isfile('./models/best_{}_{}.pth'.format('adv', args.dim))
     gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format('adv', args.dim)))
 
-    student=QGRU(args.threshold, scale=0.25, dim=args.student,  drop=0.0).cuda()
-    distiller = Distiller(args.threshold, args.dim, args.student).cuda()
+    student=QGRU2(args.threshold, scale=0.25, dim=args.student,  drop=0.0).cuda()
+    distiller = Distiller(args.threshold, args.dim, args.student, lamb_r = 0.1).cuda()
 
     if args.net == 'ff':
         classifier = MLP(args.threshold, dim=args.dim).cuda()
@@ -118,8 +118,8 @@ if __name__ == '__main__':
     sched_g   = torch.optim.lr_scheduler.StepLR(optim_g, 1, gamma=gamma)
     sched_d   = torch.optim.lr_scheduler.StepLR(optim_d, 1, gamma=gamma)
     criterion = nn.CrossEntropyLoss()
-    warmup = 10
-    cooldown = 30
+    warmup = 20
+    cooldown = 100
     scale = 0.001
     #gen.eval()
     classifier.train()

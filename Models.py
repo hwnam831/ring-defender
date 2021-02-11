@@ -348,6 +348,83 @@ class RNNGenerator(nn.Module):
         else: 
             return torch.relu(out+noise)
 
+class RNNGenerator2(nn.Module):
+    def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(window, dim),
+            nn.ReLU(),
+            nn.Dropout(drop)
+        )
+
+        self.resblock = nn.GRU(dim,dim, num_layers=1, batch_first=True)
+
+        self.decoder = nn.Sequential(
+            nn.Linear(dim, 1)
+        )
+        self.scale = nn.Parameter(torch.ones(1)*scale)
+        self.noise = GaussianSinusoid(threshold)
+
+    def forward(self, x, distill=False):
+        signal = x[:,-1,:]
+        noise = self.scale*torch.randn_like(signal) #gaussian
+        
+        encoded = self.encoder(x.permute(0,2,1)) #N,C,S -> N,S,C
+        
+        res, _ = self.resblock(encoded)
+        out = encoded + res #N,S,C
+        out = self.decoder(out).view(out.size(0),-1)
+        
+        if distill:
+            return torch.relu(out+noise), (encoded, res, out)
+        else: 
+            return torch.relu(out+noise)
+
+class MLPGen(nn.Module):
+    def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(window, dim),
+            nn.ReLU(),
+            nn.Dropout(drop)
+        )
+
+        self.resblock = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.ReLU(),
+            nn.Dropout(drop),
+            nn.Linear(dim, dim),
+            nn.ReLU()
+        )
+
+        self.decoder = nn.Sequential(
+            nn.Linear(dim, 1)
+        )
+        self.scale = nn.Parameter(torch.ones(1)*scale)
+        self.noise = GaussianSinusoid(threshold)
+
+    def forward(self, x, distill=False):
+        signal = x[:,-1,:]
+        #noise = torch.ones_like(signal)*self.scale #offset
+        noise = self.scale*torch.randn_like(signal) #gaussian
+        
+        #noise = torch.relu(noise - signal) #Maya-like
+        #x[:,-1,:] += noise
+        #xx = x + shifter(noise)
+        #xx = x
+        encoded = self.encoder(x.permute(0,2,1)) #N,C,S -> N,S,C
+        
+        res = self.resblock(encoded)
+        out = encoded + res #N,S,C
+        out = self.decoder(out).view(out.size(0),-1)
+        #out = out + self.scale*torch.randn_like(out)
+        #out = out + noise
+        
+        if distill:
+            return torch.relu(out+noise), (encoded, res, out)
+        else: 
+            return torch.relu(out+noise)
+
 class QGRU(nn.Module):
     def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2):
         super().__init__()
@@ -391,47 +468,50 @@ class QGRU(nn.Module):
             return torch.relu(out+noise), (encoded.permute(1,0,2), res.permute(1,0,2), out)
         else: 
             return torch.relu(out+noise)
-class RNNGenerator2(nn.Module):
+class QGRU2(nn.Module):
     def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Conv1d(1, dim, window),
+            nn.Linear(window, dim),
             nn.Dropout(drop)
         )
 
-        self.resblock = nn.GRU(dim,dim, num_layers=2, batch_first=True, dropout=drop)
+        self.gru1 = nn.GRUCell(dim,dim)
 
         self.decoder = nn.Sequential(
             nn.Linear(dim, 1)
         )
         self.scale = nn.Parameter(torch.ones(1)*scale)
-        self.noise = GaussianSinusoid(threshold)
-        self.window=window
 
-    def forward(self, x, distill=False): #N, 
-        signal = x[:,self.window-1:]
-        #noise = torch.ones_like(signal)*self.scale #offset
+
+    def forward(self, x, distill=False):
+        signal = x[:,-1,:]
+
         noise = self.scale*torch.randn_like(signal) #gaussian
         
-        #noise = torch.relu(noise - signal) #Maya-like
-        #x[:,-1,:] += noise
-        #xx = x + shifter(noise)
-        #xx = x
-        encoded = self.encoder(x.view(x.size(0),1,-1)).permute(0,2,1) #N,C,S -> N,S,C
-        
-        res, _ = self.resblock(encoded)
-        out = encoded + res #N,S,C
+        src = x.permute(2,0,1) # N,C,S -> S,N,C
+
+        encoded = self.encoder(src)
+        h1 = torch.zeros_like(encoded[0])
+        hiddens = []
+        for item in encoded:
+            h1 = self.gru1(item, h1)
+            hiddens.append(h1)
+        res = torch.stack(hiddens)
+        out = encoded + res #S,N,C
         out = self.decoder(out).view(out.size(0),-1)
+        out = out.permute(1,0)
         #out = out + self.scale*torch.randn_like(out)
         #out = out + noise
         
         if distill:
-            return torch.relu(out+noise), (encoded, res, out)
+            return torch.relu(out+noise), (encoded.permute(1,0,2), res.permute(1,0,2), out)
         else: 
             return torch.relu(out+noise)
 
+
 class Distiller(nn.Module):
-    def __init__(self, threshold, tdim=256, sdim=32, lamb_d = 1.0, lamb_r = 1.0, window=32):
+    def __init__(self, threshold, tdim=256, sdim=32, lamb_d = 0.1, lamb_r = 0.1, window=32):
         super().__init__()
         self.map1 = nn.Linear(sdim, tdim)
         self.map2 = nn.Linear(sdim, tdim)
