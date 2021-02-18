@@ -1,5 +1,6 @@
 import RingDataset
 from Models import CNNModel, RNNGenerator2, Distiller, MLP, RNNModel, QGRU, QGRU2
+import Models
 import os
 import argparse
 import numpy as np
@@ -108,15 +109,14 @@ if __name__ == '__main__':
     else:
         classifier_test = CNNModel(args.threshold, dim=args.dim).cuda()
 
+    disc = Models.CNNDiscriminator(args.threshold, dim=args.dim).cuda() #discriminator
+
+    optim_disc = torch.optim.RMSprop(disc.parameters(), lr=args.lr)
     optim_c = torch.optim.Adam(classifier.parameters())
     optim_c2 = torch.optim.Adam(classifier_test.parameters(), lr=args.lr)
     optim_g = torch.optim.Adam(student.parameters())
     optim_d = torch.optim.Adam(distiller.parameters())
-    gamma = 0.97
-    sched_c   = torch.optim.lr_scheduler.StepLR(optim_c, 1, gamma=gamma)
-    sched_c2   = torch.optim.lr_scheduler.StepLR(optim_c2, 1, gamma=gamma)
-    sched_g   = torch.optim.lr_scheduler.StepLR(optim_g, 1, gamma=gamma)
-    sched_d   = torch.optim.lr_scheduler.StepLR(optim_d, 1, gamma=gamma)
+
     criterion = nn.CrossEntropyLoss()
     warmup = 20
     cooldown = 100
@@ -130,56 +130,83 @@ if __name__ == '__main__':
         mloss = 0.0
         for x,y in trainloader:
             xdata, ydata = x.cuda(), y.cuda()
+            disc_label = 2*(ydata.float()-0.5) # 1 for ones, -1 for zeros
             shifted = shifter(xdata)
             #train classifier
             optim_c.zero_grad()
             optim_g.zero_grad()
             optim_d.zero_grad()
+            optim_disc.zero_grad()
             perturb, t_out = gen(shifted, distill=True)
             perturb = perturb.view(shifted.size(0),-1)
-            output = classifier(xdata[:,31:]+perturb.detach())
+            p_input = xdata[:,31:]+perturb.detach()
+            output = classifier(p_input)
+            fakes = disc(p_input)
+            loss_disc = torch.mean(fakes*disc_label)
             loss_c = criterion(output, ydata)
             _, s_out = student(shifted, distill=True)
             loss_d = distiller(s_out, t_out)
             mloss += loss_d.item()/len(trainloader)
             loss_d.backward()
+            loss_disc.backward()
             optim_g.step()
             optim_d.step()
             loss_c.backward()
             optim_c.step()
+            optim_disc.step()
+            for p in disc.parameters():
+                p.data.clamp_(-0.01, 0.01)
         print("Warmup {} \t Distill loss {:.4f}".format(e+1, mloss))
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr)
-    optim_g = torch.optim.Adam(student.parameters(), lr=args.lr*2)
+    optim_g = torch.optim.Adam(student.parameters(), lr=args.lr)
     optim_d = torch.optim.Adam(distiller.parameters(), lr=args.lr)
+    optim_disc = torch.optim.RMSprop(disc.parameters(), lr=args.lr)
+
+    gamma = 0.98
+    sched_c   = torch.optim.lr_scheduler.StepLR(optim_c, 1, gamma=gamma)
+    sched_c2   = torch.optim.lr_scheduler.StepLR(optim_c2, 1, gamma=gamma)
+    sched_g   = torch.optim.lr_scheduler.StepLR(optim_g, 1, gamma=gamma)
+    sched_d   = torch.optim.lr_scheduler.StepLR(optim_d, 1, gamma=gamma)
+    sched_disc = torch.optim.lr_scheduler.StepLR(optim_disc, 1, gamma=gamma)
     for e in range(args.epochs):
         student.train()
         classifier.train()
         trainstart = time.time()
         for x,y in trainloader:
             xdata, ydata = x.cuda(), y.cuda()
+            disc_label = 2*(ydata.float()-0.5) # 1 for ones, -1 for zeros
             shifted = shifter(xdata)
             #train classifier
             optim_c.zero_grad()
+            optim_disc.zero_grad()
             perturb, s_out = student(shifted, distill=True)
             perturb = perturb.view(shifted.size(0),-1)
 
-            output = classifier(xdata[:,31:]+perturb.detach())
+            p_input = xdata[:,31:]+perturb.detach()
+            output = classifier(p_input)
+            fakes = disc(p_input)
             loss_c = criterion(output, ydata)
             loss_c.backward()
+            loss_disc = torch.mean(fakes*disc_label)
+            loss_disc.backward()
             optim_c.step()
-
+            optim_disc.step()
+            for p in disc.parameters():
+                p.data.clamp_(-0.01, 0.01)
             #train student
             optim_g.zero_grad()
             optim_d.zero_grad()
             _, t_out = gen(shifted, distill=True)
             
-            output = classifier(xdata[:,31:] + perturb)
+            p_input = xdata[:,31:]+perturb.detach()
+            output = classifier(p_input)
+            fakes = disc(p_input)
             loss_comp = distiller(s_out, t_out)
             fake_target = 1-ydata
-
+            loss_disc = -torch.mean(fakes*disc_label)
             loss_adv1 = criterion(output, fake_target)
 
-            loss = 0.1*loss_adv1 + loss_comp
+            loss = loss_adv1 + loss_comp + loss_disc
 
             loss.backward()
             optim_g.step()
@@ -188,6 +215,7 @@ if __name__ == '__main__':
         student.eval()
         for x,y in valloader:
             xdata, ydata = x.cuda(), y.cuda()
+            disc_label = 2*(ydata.float()-0.5) # 1 for ones, -1 for zeros
             shifted = shifter(xdata)
             #train classifier
             optim_c2.zero_grad()
@@ -202,6 +230,8 @@ if __name__ == '__main__':
         sched_c.step()
         sched_c2.step()
         sched_g.step()
+        sched_d.step()
+        sched_disc.step()
 
         mloss = 0.0
         totcorrect = 0

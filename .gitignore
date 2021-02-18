@@ -8,6 +8,8 @@ victim
 *.log
 *.pkl
 .ipynb_checkpoints/
-models/
+*.pth
+*.tsv
+*.pdf
 __pycache__/
 .vscode/

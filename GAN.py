@@ -1,5 +1,5 @@
 import RingDataset
-from Models import CNNModel, CNNGenerator, RNNModel, GaussianGenerator, GaussianSinusoid, MLPGen, RNNGenerator2, RNNGenerator, MLP, OffsetGenerator
+import Models
 import os
 import argparse
 import numpy as np
@@ -65,12 +65,12 @@ def get_args():
     parser.add_argument(
             "--lr",
             type=float,
-            default=2e-5,
+            default=5e-5,
             help='Default learning rate')
     parser.add_argument(
             "--amp",
             type=float,
-            default='2',
+            default='2.5',
             help='noise amp scale')
     parser.add_argument(
             "--fresh",
@@ -103,85 +103,94 @@ if __name__ == '__main__':
     
     if args.gen == 'gau':
         gen = nn.Sequential(
-        GaussianGenerator(args.threshold, scale=args.amp),
+        Models.GaussianGenerator(args.threshold, scale=args.amp),
         nn.ReLU(),
         ).cuda()
     elif args.gen == 'sin':
         gen = nn.Sequential(
-        GaussianSinusoid(args.threshold, scale=args.amp),
+        Models.GaussianSinusoid(args.threshold, scale=args.amp),
         nn.ReLU(),
         ).cuda()
     elif args.gen == 'cnn':
-        gen=CNNGenerator(args.threshold, scale=0.5).cuda()
+        gen=Models.CNNGenerator(args.threshold, scale=0.5).cuda()
     elif args.gen == 'adv':
-        gen=RNNGenerator2(args.threshold, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./models/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
+        gen=Models.RNNGenerator2(args.threshold, scale=0.25, dim=args.dim).cuda()
+        if os.path.isfile('./gans/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
             print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format(args.gen, args.dim)))
+            gen.load_state_dict(torch.load('./gans/best_{}_{}.pth'.format(args.gen, args.dim)))
     elif args.gen == 'rnn':
-        gen=RNNGenerator(args.threshold, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./models/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
+        gen=Models.RNNGenerator(args.threshold, scale=0.25, dim=args.dim).cuda()
+        if os.path.isfile('./gans/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
             print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format(args.gen, args.dim)))
+            gen.load_state_dict(torch.load('./gans/best_{}_{}.pth'.format(args.gen, args.dim)))
     elif args.gen == 'mlp':
-        gen=MLPGen(args.threshold, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./models/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
+        gen=Models.MLPGen(args.threshold, scale=0.25, dim=args.dim).cuda()
+        if os.path.isfile('./gans/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
             print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./models/best_{}_{}.pth'.format(args.gen, args.dim)))
+            gen.load_state_dict(torch.load('./gans/best_{}_{}.pth'.format(args.gen, args.dim)))
     elif args.gen == 'off':
-        gen=OffsetGenerator(args.threshold, scale=args.amp/2).cuda()
+        gen=Models.OffsetGenerator(args.threshold, scale=args.amp/2).cuda()
     else:
         print(args.gen + ' not supported\n')
         exit(-1)
     
     if args.net == 'ff':
-        classifier = MLP(args.threshold, dim=args.dim).cuda()
+        classifier = Models.MLP(args.threshold, dim=args.dim).cuda()
     elif args.net == 'rnn':
-        classifier = RNNModel(args.threshold, dim=args.dim).cuda()
+        classifier = Models.RNNModel(args.threshold, dim=args.dim).cuda()
     else:
-        classifier = CNNModel(args.threshold, dim=args.dim).cuda()
+        classifier = Models.CNNModel(args.threshold, dim=args.dim).cuda()
 
     if args.testnet == 'ff':
-        classifier_test = MLP(args.threshold, dim=args.dim).cuda()
+        classifier_test = Models.MLP(args.threshold, dim=args.dim).cuda()
     elif args.testnet == 'rnn':
-        classifier_test = RNNModel(args.threshold, dim=args.dim).cuda()
+        classifier_test = Models.RNNModel(args.threshold, dim=args.dim).cuda()
     else:
-        classifier_test = CNNModel(args.threshold, dim=args.dim).cuda()
+        classifier_test = Models.CNNModel(args.threshold, dim=args.dim).cuda()
 
+    disc = Models.CNNDiscriminator(args.threshold, dim=args.dim).cuda() #discriminator
+    cls2 = Models.RBFLinear(args.threshold).cuda()
 
-    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr)
-    optim_c2 = torch.optim.Adam(classifier_test.parameters(), lr=args.lr)
-    optim_g = torch.optim.Adam(gen.parameters(), lr=args.lr*2)
-
-    gamma = 0.98
-    sched_c   = torch.optim.lr_scheduler.StepLR(optim_c, 1, gamma=gamma)
-    sched_c2   = torch.optim.lr_scheduler.StepLR(optim_c2, 1, gamma=gamma)
-    sched_g   = torch.optim.lr_scheduler.StepLR(optim_g, 1, gamma=gamma)
-
+    optim_c = torch.optim.Adam(classifier.parameters())
+    optim_d = torch.optim.RMSprop(disc.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
     C = args.amp
     warmup = 70
     cooldown = 100
     #scale = 0.002
-    scale = 0.02
+    scale = 0.05
     for e in range(warmup):
         classifier.train()
+        disc.train()
         totcorrect = 0
         totcount = 0
         zerocorrect = 0
         zerocount = 0
         onecorrect = 0
         onecount = 0
+        mloss = 0.0
         for x,y in trainloader:
             xdata, ydata = x.cuda(), y.cuda()
+            disc_label = 2*(ydata.float()-0.5) # 1 for ones, -1 for zeros
             shifted = shifter(xdata)
             #train classifier
             optim_c.zero_grad()
+            optim_d.zero_grad()
             perturb = gen(shifted).view(shifted.size(0),-1)
-            output = classifier(xdata[:,31:]+perturb.detach())
+            p_input = xdata[:,31:]+perturb.detach()
+            output = classifier(p_input)
+            fakes = disc(p_input)
+            #reals = disc(xdata[:,31:])
             loss_c = criterion(output, ydata)
             loss_c.backward()
+            loss_d = torch.mean(fakes*disc_label)
+            mloss = mloss + loss_d.item()
+            loss_d.backward()
             optim_c.step()
+            optim_d.step()
+            for p in disc.parameters():
+                p.data.clamp_(-0.01, 0.01)
+
             pred = output.argmax(axis=-1)
             totcorrect += (pred==ydata).sum().item()
             totcount += y.size(0)
@@ -189,31 +198,49 @@ if __name__ == '__main__':
             zerocount += (ydata==0).sum().item()
             onecorrect += ((pred==1)*(ydata==1)).sum().item()
             onecount += (ydata==1).sum().item()
+        mloss = mloss / len(trainloader)
         macc = float(totcorrect)/totcount
         zacc = float(zerocorrect)/zerocount
         oacc = float(onecorrect)/onecount
         if (e+1)%10 == 0:
-            print("Warmup epoch {} \t acc {:.4f}".format(e+1, macc))
+            print("Warmup epoch {} \t acc {:.4f}\t loss {}".format(e+1, macc, mloss))
             print("zacc {:.6f}\t oneacc {:.6f}\n".format(zacc, oacc))
 
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr)
+    optim_c_t = torch.optim.Adam(classifier_test.parameters(), lr=args.lr)
+    optim_g = torch.optim.Adam(gen.parameters(), lr=args.lr)
+    optim_d = torch.optim.RMSprop(disc.parameters(), lr=args.lr)
+    gamma = 0.97
+    sched_c   = torch.optim.lr_scheduler.StepLR(optim_c, 1, gamma=gamma)
+    sched_c_t   = torch.optim.lr_scheduler.StepLR(optim_c_t, 1, gamma=gamma)
+    sched_g   = torch.optim.lr_scheduler.StepLR(optim_g, 1, gamma=gamma)
+    sched_d   = torch.optim.lr_scheduler.StepLR(optim_d, 1, gamma=gamma)
     for e in range(args.epochs):
         gen.train()
         classifier.train()
         trainstart = time.time()
         for x,y in trainloader:
             xdata, ydata = x.cuda(), y.cuda()
+            disc_label = 2*(ydata.float()-0.5) # 1 for ones, -1 for zeros
             shifted = shifter(xdata)
             #train classifier
             optim_c.zero_grad()
+            optim_d.zero_grad()
             perturb = gen(shifted).view(shifted.size(0),-1)
-            #perturb = quantizer(perturb)
-            #perturb = gen(xdata[:,31:])
+
             #interleaving?
             p_input = xdata[:,31:]+perturb.detach()
             output = classifier(p_input)
+            fakes = disc(p_input)
+            #reals = disc(xdata[:,31:])
             loss_c = criterion(output, ydata)
             loss_c.backward()
+            loss_d = torch.mean(fakes*disc_label)
+            loss_d.backward()
             optim_c.step()
+            optim_d.step()
+            for p in disc.parameters():
+                p.data.clamp_(-0.01, 0.01)
 
             #train generator
             optim_g.zero_grad()
@@ -221,18 +248,20 @@ if __name__ == '__main__':
             #perturb = gen(xdata[:,31:])
             p_input = xdata[:,31:]+perturb
             output = classifier(p_input)
+            fakes = disc(p_input)
             #perturb = quantizer(perturb)
             #pnorm = torch.norm(perturb, dim=-1) - C
             #loss_p = torch.mean(torch.relu(pnorm))
             hinge = perturb.mean(dim=-1) - C
             hinge[hinge<0] = 0.0
             loss_p = torch.mean(hinge)
-
+            loss_d = -torch.mean(fakes*disc_label)
+            #loss_p = torch.mean(torch.norm(perturb,dim=-1))
             fake_target = 1-ydata
 
             loss_adv1 = criterion(output, fake_target)
-            #loss = loss_adv1 + scale*loss_p + 0.1*loss_d
-            loss = loss_adv1 + scale*loss_p
+            loss = 0.5*loss_adv1 + scale*loss_p + 0.5*loss_d
+            #loss = loss_adv1 + scale*loss_p
             loss.backward()
             optim_g.step()
         classifier_test.train()
@@ -241,7 +270,7 @@ if __name__ == '__main__':
             xdata, ydata = x.cuda(), y.cuda()
             shifted = shifter(xdata)
             #train classifier
-            optim_c2.zero_grad()
+            optim_c_t.zero_grad()
             perturb = gen(shifted).view(shifted.size(0),-1)
             perturb = quantizer(perturb)
             #perturb = gen(xdata[:,31:])
@@ -249,10 +278,10 @@ if __name__ == '__main__':
             output = classifier_test(xdata[:,31:]+perturb.detach())
             loss_c = criterion(output, ydata)
             loss_c.backward()
-            optim_c2.step()
+            optim_c_t.step()
         sched_c.step()
-
-        sched_c2.step()
+        sched_d.step()
+        sched_c_t.step()
         sched_g.step()
 
         mloss = 0.0
@@ -269,20 +298,23 @@ if __name__ == '__main__':
             classifier_test.eval()
             for x,y in testloader:
                 xdata, ydata = x.cuda(), y.cuda()
+                disc_label = 2*(ydata.float()-0.5) # 1 for ones, -1 for zeros
                 shifted = shifter(xdata)
                 perturb = gen(shifted).view(shifted.size(0),-1)
                 perturb = quantizer(perturb)
                 #perturb = gen(xdata[:,31:])
                 norm = torch.mean(perturb)
                 #output = classifier_test(xdata[:,31:]+perturb)
-                output = classifier(xdata[:,31:]+perturb.detach())
+                p_input = xdata[:,31:]+perturb.detach()
+                output = classifier(p_input)
+                fakes = disc(p_input)
                 loss_c = criterion(output, ydata)
                 pnorm = torch.norm(perturb, dim=-1) - C
                 loss_p = torch.mean(torch.relu(pnorm))
                 pred = output.argmax(axis=-1)
                 mnorm += norm.item()/len(testloader)
                 mloss += loss_c.item()/len(testloader)
-                mloss2 += scale*loss_p.item()/len(testloader)
+                mloss2 += torch.mean(fakes*disc_label).item()/len(testloader)
                 #macc += ((pred==ydata).sum().float()/pred.nelement()).item()/len(testloader)
                 totcorrect += (pred==ydata).sum().item()
                 totcount += y.size(0)
@@ -295,31 +327,32 @@ if __name__ == '__main__':
             oacc = float(onecorrect)/onecount
             #print("epoch {} \t acc {:.4f}\t loss {:.4f}\t loss_p {:.4f}\t Avg perturb {:.4f}\t duration {:.4f}".format(e+1, macc, mloss, mloss2, mnorm, time.time()-trainstart))
             #print("zacc {:.6f}\t oneacc {:.6f}\n".format(zacc, oacc))
-            print("epoch {} \t acc {:.4f}\t zacc {:.4f}\t oneacc {:.4f}\t Avg perturb {:.4f}".format(e+1, macc, zacc, oacc, mnorm))
+            print("epoch {} \t acc {:.4f}\t zacc {:.4f}\t oneacc {:.4f}\t Avg perturb {:.4f}\t closs {:.4f}\t dloss {}".format(e+1, macc, zacc, oacc, mnorm, mloss, mloss2))
             if e > (args.epochs*4)//5 and macc - 0.5 < 0.001:
                 break
     gen.eval()
     lastacc = 0.0
     lastnorm = 0.0
-    optim_c2 = torch.optim.Adam(classifier_test.parameters(), lr=args.lr)
-    sched_c2   = torch.optim.lr_scheduler.StepLR(optim_c2, 1, gamma=gamma)
+    optim_c_t = torch.optim.Adam(classifier_test.parameters(), lr=args.lr)
+    sched_c_t   = torch.optim.lr_scheduler.StepLR(optim_c_t, 1, gamma=gamma)
     for e in range(cooldown):
         classifier_test.train()
         for x,y in valloader:
             xdata, ydata = x.cuda(), y.cuda()
             shifted = shifter(xdata)
             #train classifier
-            optim_c2.zero_grad()
+            optim_c_t.zero_grad()
             perturb = gen(shifted).view(shifted.size(0),-1)
             #perturb = gen(xdata[:,31:])
             #interleaving?
             output = classifier_test(xdata[:,31:]+perturb.detach())
             loss_c = criterion(output, ydata)
             loss_c.backward()
-            optim_c2.step()
+            optim_c_t.step()
 
 
         mloss = 0.0
+        dloss = 0.0
         totcorrect = 0
         totcount = 0
         mnorm = 0.0
@@ -359,7 +392,7 @@ if __name__ == '__main__':
     print("Last 10 acc: {:.6f}\t perturb: {:.6f}".format(lastacc,lastnorm))
     if args.gen == 'adv' or args.gen == 'rnn':
         filename = "{}_{}_{:.3f}_{:.3f}.pth".format(args.gen,args.dim,lastnorm, lastacc)
-        flist = os.listdir('models')
+        flist = os.listdir('gans')
         best = 1.0
         smallest = 10.0
         rp = re.compile(r"{}_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.gen,args.dim))
@@ -374,7 +407,7 @@ if __name__ == '__main__':
                     smallest = fperturb
         if lastacc <= best:
             print('New best found')
-            torch.save(gen.state_dict(), './models/'+filename)
-            torch.save(gen.state_dict(), './models/'+'best_{}_{}.pth'.format(args.gen, args.dim))
+            torch.save(gen.state_dict(), './gans/'+filename)
+            torch.save(gen.state_dict(), './gans/'+'best_{}_{}.pth'.format(args.gen, args.dim))
         elif lastnorm <= smallest:
-            torch.save(gen.state_dict(), './models/'+filename)
+            torch.save(gen.state_dict(), './gans/'+filename)

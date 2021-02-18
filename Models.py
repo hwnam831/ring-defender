@@ -73,6 +73,56 @@ class CNNModel(nn.Module):
         out = self.FC(out.view(out.size(0),-1))
         return out
 
+class CNNDiscriminator(nn.Module):
+    def __init__(self, threshold, dim=128, drop=0.0):
+        super().__init__()
+
+        self.CNN = nn.Sequential(
+            nn.Conv1d(1, 32, 11, 1, 5),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            nn.Conv1d(32, 64, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+            nn.Conv1d(64, 128, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.Conv1d(128, 256, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+        )
+        self.FC = nn.Sequential(
+            nn.Linear(256*((threshold+3)//4), 512),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            nn.Linear(512,512),
+            nn.ReLU(),
+            nn.Dropout(drop),
+            nn.Linear(512,1)
+        )
+    def forward(self, x):
+        out = self.CNN(x.view(x.size(0),1,x.size(1)))
+        out = self.FC(out.view(out.size(0),-1))
+        return out.view(-1)
+
+class FCDiscriminator(nn.Module):
+    def __init__(self, threshold, dim=128, drop=0.1):
+        super().__init__()
+        self.FC = nn.Sequential(
+        nn.Linear(threshold,dim//2),
+        nn.ReLU(),
+        nn.Linear(dim//2,dim),
+        nn.ReLU(),
+        nn.Linear(dim,dim),
+        nn.ReLU(),
+        nn.Linear(dim,1)
+        )
+    def forward(self, x):
+        out = self.FC(x.view(x.size(0),-1))
+        return out.view(-1)
+
+
 class CNNModelWide(nn.Module):
     def __init__(self, threshold, dim=128, drop=0.1):
         super().__init__()
@@ -544,3 +594,16 @@ def MLP(threshold, dim):
         nn.Linear(dim,2)
         )
         return model
+
+class RBFLinear(nn.Module):
+    def __init__(self, in_dim, hidden_dim=2048):
+        super().__init__()
+        self.centers = nn.Parameter(torch.Tensor(hidden_dim, in_dim))
+        self.gammas = nn.Parameter(torch.Tensor(hidden_dim))
+        nn.init.normal_(self.centers, 0, 1)
+        nn.init.constant_(self.gammas, 1.0)
+        self.fc = nn.Linear(hidden_dim, 1)
+    def forward(self, x):
+        dist = (x[:,None,:] - self.centers).norm(dim=-1) * self.gammas
+        kerns = torch.exp(-dist**2)
+        return self.fc(kerns)
