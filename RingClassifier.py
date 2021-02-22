@@ -10,7 +10,7 @@ from torch.utils.data import random_split
 import torch.nn as nn
 import re
 import time
-
+from sklearn import svm
  
 
 window=32 #this is fixed
@@ -65,12 +65,12 @@ def get_args():
     parser.add_argument(
             "--lr",
             type=float,
-            default=2e-5,
+            default=5e-5,
             help='Default learning rate')
     parser.add_argument(
             "--amp",
             type=float,
-            default='2',
+            default='3',
             help='noise amp scale')
     parser.add_argument(
             "--fresh",
@@ -357,6 +357,42 @@ if __name__ == '__main__':
                 lastacc += macc/10
                 lastnorm += mnorm/10
     print("Last 10 acc: {:.6f}\t perturb: {:.6f}".format(lastacc,lastnorm))
+
+    train_x = []
+    train_y = []
+    test_x = []
+    test_y = []
+    with torch.no_grad():
+        for x,y in valloader:
+            xdata= x.cuda()
+            shifted = shifter(xdata)
+            #train classifier
+            perturb = gen(shifted).view(shifted.size(0),-1)
+            perturb = quantizer(perturb)
+            perturbed_x = xdata[:,31:]+perturb
+            for p in perturbed_x:
+                train_x.append(p.cpu().numpy())
+            for y_i in y:
+                train_y.append(y_i.item())
+        for x,y in testloader:
+            xdata= x.cuda()
+            shifted = shifter(xdata)
+            #train classifier
+            perturb = gen(shifted).view(shifted.size(0),-1)
+            perturb = quantizer(perturb)
+            perturbed_x = xdata[:,31:]+perturb
+            for p in perturbed_x:
+                test_x.append(p.cpu().numpy())
+            for y_i in y:
+                test_y.append(y_i.item())
+    clf = svm.SVC(gamma=0.02)
+    clf.fit(train_x, train_y)
+    pred_y = clf.predict(test_x)
+
+    svmacc = (pred_y == test_y).sum()/len(pred_y)
+    print("SVM acc: {:.6f}".format(svmacc))
+    lastacc = max(lastacc, svmacc)
+
     if args.gen == 'adv' or args.gen == 'rnn':
         filename = "{}_{}_{:.3f}_{:.3f}.pth".format(args.gen,args.dim,lastnorm, lastacc)
         flist = os.listdir('models')

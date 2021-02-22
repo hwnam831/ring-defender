@@ -602,8 +602,40 @@ class RBFLinear(nn.Module):
         self.gammas = nn.Parameter(torch.Tensor(hidden_dim))
         nn.init.normal_(self.centers, 0, 1)
         nn.init.constant_(self.gammas, 1.0)
-        self.fc = nn.Linear(hidden_dim, 1)
+        self.fc = nn.Linear(hidden_dim, 2)
     def forward(self, x):
         dist = (x[:,None,:] - self.centers).norm(dim=-1) * self.gammas
         kerns = torch.exp(-dist**2)
         return self.fc(kerns)
+
+class FakeSVM(nn.Module):
+    def __init__(self, in_dim, clf, gamma = 0.01):
+        super().__init__()
+        #self.gamma = 1/(in_dim)
+        self.gamma = gamma
+        centers = torch.from_numpy(clf.support_vectors_)
+        self.centers = nn.Parameter(centers)
+        self.fc = nn.Linear(centers.size(0), 1)
+        self.fc.weight.data = torch.from_numpy(clf.dual_coef_)
+        self.fc.bias.data = torch.from_numpy(clf.intercept_)
+    def forward(self, x):
+        dist = (x[:,None,:] - self.centers).norm(dim=-1)
+        kerns = torch.exp(-self.gamma * dist**2)
+        return torch.sigmoid(self.fc(kerns)).view(-1)
+
+class SVMDiscriminator(nn.Module):
+    def __init__(self, in_dim, clf, gamma = 0.01):
+        super().__init__()
+        #self.gamma = 1/(in_dim)
+        self.gamma = gamma
+        centers = torch.from_numpy(clf.support_vectors_)
+        self.centers = nn.Parameter(centers)
+        self.fc = nn.Linear(centers.size(0), 1)
+        self.fc.weight.data = torch.from_numpy(clf.dual_coef_)
+        self.fc.bias.data = torch.from_numpy(clf.intercept_)
+    def forward(self, x):
+        dist = (x[:,None,:] - self.centers).norm(dim=-1)
+        kerns = torch.exp(-self.gamma * dist**2)
+        return self.fc(kerns).view(-1)
+    def clip(self, low=-0.01, high=0.01):
+        self.fc.weight.data.clamp_(low, high)
