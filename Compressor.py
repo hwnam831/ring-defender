@@ -39,7 +39,7 @@ def get_args():
     parser.add_argument(
             "--epochs",
             type=int,
-            default='20',
+            default='30',
             help='number of epochs')
     parser.add_argument(
             "--file_prefix",
@@ -54,12 +54,12 @@ def get_args():
     parser.add_argument(
             "--dim",
             type=int,
-            default='128',
+            default='160',
             help='internal channel dimension')
     parser.add_argument(
             "--student",
             type=int,
-            default='12',
+            default='10',
             help='student channel dimension')
     parser.add_argument(
             "--lr",
@@ -69,7 +69,7 @@ def get_args():
     parser.add_argument(
             "--model_path",
             type=str,
-            default='models',
+            default='gans',
             help='where to find the pth files')
 
     return parser.parse_args()
@@ -129,7 +129,7 @@ if __name__ == '__main__':
                 train_x.append(p.cpu().numpy())
             for y_i in y:
                 train_y.append(y_i.item())
-    clf = svm.SVC(gamma=0.02)
+    clf = svm.SVC(gamma='auto')
     clf.fit(train_x, train_y)
 
     disc = Models.SVMDiscriminator(args.threshold, clf, 0.02).cuda() #discriminator
@@ -234,7 +234,7 @@ if __name__ == '__main__':
             loss_adv1 = criterion(output, fake_target)
 
             #loss = 0.5*loss_adv1 + loss_comp + 0.001*loss_disc
-            loss = loss_adv1 + 0.002*loss_comp + 0.02*loss_disc
+            loss = loss_adv1 + scale*loss_comp + 0.02*loss_disc
 
             loss.backward()
             optim_g.step()
@@ -379,7 +379,7 @@ if __name__ == '__main__':
                 test_x.append(p.cpu().numpy())
             for y_i in y:
                 test_y.append(y_i.item())
-    clf = svm.SVC(gamma=0.02)
+    clf = svm.SVC(gamma='auto')
     clf.fit(train_x, train_y)
     pred_y = clf.predict(test_x)
 

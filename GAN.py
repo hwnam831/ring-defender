@@ -45,7 +45,7 @@ def get_args():
     parser.add_argument(
             "--epochs",
             type=int,
-            default='100',
+            default='150',
             help='number of epochs')
     parser.add_argument(
             "--file_prefix",
@@ -60,7 +60,7 @@ def get_args():
     parser.add_argument(
             "--dim",
             type=int,
-            default='128',
+            default='160',
             help='internal channel dimension')
     parser.add_argument(
             "--lr",
@@ -70,7 +70,7 @@ def get_args():
     parser.add_argument(
             "--amp",
             type=float,
-            default='3.0',
+            default='2.7',
             help='noise amp scale')
     parser.add_argument(
             "--fresh",
@@ -163,7 +163,7 @@ if __name__ == '__main__':
                 train_x.append(p.cpu().numpy())
             for y_i in y:
                 train_y.append(y_i.item())
-    clf = svm.SVC(gamma=0.02)
+    clf = svm.SVC(gamma='auto')
     clf.fit(train_x, train_y)
 
     xvar = np.array(train_x).var()
@@ -458,7 +458,7 @@ if __name__ == '__main__':
                 test_x.append(p.cpu().numpy())
             for y_i in y:
                 test_y.append(y_i.item())
-    clf = svm.SVC(gamma=0.02)
+    clf = svm.SVC(gamma='auto')
     clf.fit(train_x, train_y)
     pred_y = clf.predict(test_x)
 
