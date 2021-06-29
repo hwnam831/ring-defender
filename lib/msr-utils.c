@@ -140,7 +140,14 @@ uint64_t rdmsr_on_cpu_0(uint32_t reg) {
 			}
 		}
 	}
-
+#ifdef DEBUG
+		register uint64_t time1, time2;
+		unsigned cycles_high, cycles_low, cycles_high1, cycles_low1;
+	asm volatile ("CPUID\n\t"
+				"RDTSC\n\t"
+				"mov %%edx, %0\n\t"
+				"mov %%eax, %1\n\t": "=r" (cycles_high), "=r" (cycles_low):: "rax", "rbx", "rcx", "rdx");
+#endif
 	if (pread(fd, &data, sizeof data, reg) != sizeof data) {
 		if (errno == EIO) {
 			fprintf(stderr, "rdmsr: CPU %d cannot read "
@@ -152,7 +159,15 @@ uint64_t rdmsr_on_cpu_0(uint32_t reg) {
 			exit(127);
 		}
 	}
-
+#ifdef DEBUG
+		asm volatile ("RDTSCP\n\t"
+				"mov %%edx, %0\n\t"
+				"mov %%eax, %1\n\t"
+				"CPUID\n\t": "=r" (cycles_high1), "=r" (cycles_low1):: "rax", "rbx", "rcx", "rdx");
+			time1= (((uint64_t)cycles_high << 32) | cycles_low);
+			time2= (((uint64_t)cycles_high1 << 32) | cycles_low1);
+	printf("RDMSR took %d cycles\n",time2-time1);
+#endif
   //close(fd);
 
 	return data;
@@ -169,7 +184,7 @@ void wrmsr_on_cpu_0(uint32_t reg, int valcnt, uint64_t *regvals) {
 	int cpu = 0;
 
 	static int fd = -1;
-
+	
 	if(fd < 0){
 		fd = open(msr_file_name, O_WRONLY);
 		if (fd < 0) {
@@ -188,6 +203,14 @@ void wrmsr_on_cpu_0(uint32_t reg, int valcnt, uint64_t *regvals) {
 	}
 
 	while (valcnt--) {
+#ifdef DEBUG
+		register uint64_t time1, time2;
+		unsigned cycles_high, cycles_low, cycles_high1, cycles_low1;
+	asm volatile ("CPUID\n\t"
+				"RDTSC\n\t"
+				"mov %%edx, %0\n\t"
+				"mov %%eax, %1\n\t": "=r" (cycles_high), "=r" (cycles_low):: "rax", "rbx", "rcx", "rdx");
+#endif
 		data=*regvals++;
 		if (pwrite(fd, &data, sizeof data, reg) != sizeof data) {
 			if (errno == EIO) {
@@ -201,8 +224,17 @@ void wrmsr_on_cpu_0(uint32_t reg, int valcnt, uint64_t *regvals) {
 				exit(127);
 			}
 		}
+#ifdef DEBUG
+		asm volatile ("RDTSCP\n\t"
+				"mov %%edx, %0\n\t"
+				"mov %%eax, %1\n\t"
+				"CPUID\n\t": "=r" (cycles_high1), "=r" (cycles_low1):: "rax", "rbx", "rcx", "rdx");
+			time1= (((uint64_t)cycles_high << 32) | cycles_low);
+			time2= (((uint64_t)cycles_high1 << 32) | cycles_low1);
+	printf("WRMSR took %d cycles\n",time2-time1);
+#endif
 	}
-
+	
   //close(fd);
 
 	return;
