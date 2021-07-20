@@ -4,11 +4,11 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 class RingDataset(Dataset):
-    def __init__(self, pklfile, threshold=40):
+    def __init__(self, pklfile, threshold=40, history=32):
         datalist = pickle.load(open(pklfile, 'rb'))
         targets = []
         inputs = []
-        self.offset = 31
+        self.offset = history-1
         for data in datalist:
             for i in range(1,len(data)):
                 bit, trace = data[i]
@@ -50,8 +50,30 @@ class RingDataset(Dataset):
     def __getitem__(self, idx):
         return self.input_arr[idx], self.target_arr[idx]
 
+class EDDSADataset(Dataset):
+    def __init__(self, pklfile, std=16, history=32):
+        x_arr, y_arr = pickle.load(open(pklfile, 'rb'))
+        self.offset = history-1
+        self.window = x_arr.shape[1] - self.offset
+        self.target_arr = y_arr
+        self.input_arr = x_arr
+        bcounts = [0,0]
+        cnt = 0
+                    
+        median = np.median(self.input_arr)
+        self.med = median
+        self.std = std
+        self.input_arr = self.input_arr - median
+        self.input_arr = self.input_arr/self.std
+    
+    def __len__(self):
+        return len(self.input_arr)
+    
+    def __getitem__(self, idx):
+        return self.input_arr[idx], self.target_arr[idx]
+
 if __name__ == '__main__':
-    dataset = RingDataset('core4ToSlice3_test.pkl')
+    dataset = EDDSADataset('eddsa_train.pkl')
     loader = DataLoader(dataset, batch_size=4, shuffle=True)
     '''
     for i in range(10):

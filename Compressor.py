@@ -1,10 +1,8 @@
-import RingDataset
+from RingDataset import RingDataset, EDDSADataset
 from Models import CNNModel, RNNGenerator2, Distiller, MLP, RNNModel, QGRU, QGRU2
 import Models
 import os
-import argparse
 import numpy as np
-import pickle
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
@@ -12,109 +10,51 @@ import torch.nn as nn
 import re
 import time
 from sklearn import svm
-
-window=32 #this is fixed
-
-
-def get_args():
-    """Get all the args"""
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-            "--net",
-            type=str,
-            choices=['cnn', 'rnn', 'ff'],
-            default='cnn',
-            help='Classifier choices')
-    parser.add_argument(
-            "--testnet",
-            type=str,
-            choices=['cnn', 'rnn', 'ff'],
-            default='cnn',
-            help='Test Classifier choices')
-    parser.add_argument(
-            "--threshold",
-            type=int,
-            default='42',
-            help='number of samples threshold')
-    parser.add_argument(
-            "--epochs",
-            type=int,
-            default='30',
-            help='number of epochs')
-    parser.add_argument(
-            "--file_prefix",
-            type=str,
-            default='core4ToSlice3',
-            help='traininig dataset pkl file to load')
-    parser.add_argument(
-            "--batch_size",
-            type=int,
-            default='256',
-            help='batch size')
-    parser.add_argument(
-            "--dim",
-            type=int,
-            default='160',
-            help='internal channel dimension')
-    parser.add_argument(
-            "--student",
-            type=int,
-            default='8',
-            help='student channel dimension')
-    parser.add_argument(
-            "--lr",
-            type=float,
-            default=5e-5,
-            help='Default learning rate')
-    parser.add_argument(
-            "--model_path",
-            type=str,
-            default='gans',
-            help='where to find the pth files')
-
-    return parser.parse_args()
-
-def shifter(arr, window=window):
-    dup = arr[:,None,:].expand(arr.size(0), arr.size(1)+1, arr.size(1))
-    dup2 = dup.reshape(arr.size(0), arr.size(1), arr.size(1)+1)
-    shifted = dup2[:,:window,:-window]
-    return shifted
-
-def quantizer(arr, std=8):
-    return torch.round(arr*std)/std
+from Util import get_args, shifter, quantizer
 
 if __name__ == '__main__':
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     args = get_args()
-    path = args.model_path
-    dataset = RingDataset.RingDataset(args.file_prefix+'_train.pkl', threshold=args.threshold)
-    testset =  RingDataset.RingDataset(args.file_prefix+'_test.pkl', threshold=args.threshold)
-    valset = RingDataset.RingDataset(args.file_prefix+'_valid.pkl', threshold=args.threshold)
+
+    if args.victim == 'rsa':
+        file_prefix='core4ToSlice3'
+        dataset = RingDataset(file_prefix+'_train.pkl', threshold=args.window)
+        testset =  RingDataset(file_prefix+'_test.pkl', threshold=args.window)
+        valset = RingDataset(file_prefix+'_valid.pkl', threshold=args.window)
+        window = args.window
+    else:
+        file_prefix='eddsa'
+        dataset = EDDSADataset(file_prefix+'_train.pkl')
+        testset =  EDDSADataset(file_prefix+'_test.pkl')
+        valset = EDDSADataset(file_prefix+'_valid.pkl')
+        window = dataset.window
 
     trainset=dataset
     trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
     testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
 
-    gen=RNNGenerator2(args.threshold, scale=0.25, dim=args.dim, drop=0.0).cuda()
-    assert os.path.isfile('./'+ path +'/best_{}_{}.pth'.format('adv', args.dim))
-    gen.load_state_dict(torch.load('./'+ path +'/best_{}_{}.pth'.format('adv', args.dim)))
+    gen=RNNGenerator2(window, scale=0.25, dim=args.dim, drop=0.0).cuda()
+    assert os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim, args.gen, args.dim))
+    gen.load_state_dict(torch.load('./gans/best_{}_{}_{}.pth'.format(args.victim, args.gen, args.dim)))
 
-    student=QGRU2(args.threshold, scale=0.25, dim=args.student,  drop=0.0).cuda()
-    distiller = Distiller(args.threshold, args.dim, args.student, lamb_r = 0.1).cuda()
+    student=QGRU2(window, scale=0.25, dim=args.student,  drop=0.0).cuda()
+    distiller = Distiller(window, args.dim, args.student, lamb_r = 0.1).cuda()
 
     if args.net == 'ff':
-        classifier = MLP(args.threshold, dim=args.dim).cuda()
+        classifier = MLP(window, dim=args.dim).cuda()
     elif args.net == 'rnn':
-        classifier = RNNModel(args.threshold, dim=args.dim).cuda()
+        classifier = RNNModel(window, dim=args.dim).cuda()
     else:
-        classifier = CNNModel(args.threshold, dim=args.dim).cuda()
+        classifier = CNNModel(window, dim=args.dim).cuda()
 
     if args.testnet == 'ff':
-        classifier_test = MLP(args.threshold, dim=args.dim).cuda()
+        classifier_test = MLP(window, dim=args.dim).cuda()
     elif args.testnet == 'rnn':
-        classifier_test = RNNModel(args.threshold, dim=args.dim).cuda()
+        classifier_test = RNNModel(window, dim=args.dim).cuda()
     else:
-        classifier_test = CNNModel(args.threshold, dim=args.dim).cuda()
+        classifier_test = CNNModel(window, dim=args.dim).cuda()
 
     train_x = []
     train_y = []
@@ -132,7 +72,7 @@ if __name__ == '__main__':
     clf = svm.SVC(gamma='auto')
     clf.fit(train_x, train_y)
 
-    disc = Models.SVMDiscriminator(args.threshold, clf, 0.02).cuda() #discriminator
+    disc = Models.SVMDiscriminator(window, clf, 0.02).cuda() #discriminator
 
     optim_disc = torch.optim.RMSprop(disc.parameters(), lr=args.lr)
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr)
@@ -143,7 +83,7 @@ if __name__ == '__main__':
     criterion = nn.CrossEntropyLoss()
     warmup = 20
     cooldown = 100
-    scale = 0.001
+    scale = 0.0005
     #gen.eval()
     classifier.train()
     student.train()
@@ -387,10 +327,10 @@ if __name__ == '__main__':
     print("SVM acc: {:.6f}".format(svmacc))
     lastacc = max(lastacc, svmacc)
 
-    filename = "qgru_{}_{:.3f}_{:.3f}.pth".format(args.student,lastnorm, lastacc)
-    flist = os.listdir(path)
+    filename = "qgru_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim, args.student,lastnorm, lastacc)
+    flist = os.listdir('./gans')
     best = 1.0
-    rp = re.compile(r"qgru_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.student))
+    rp = re.compile(r"qgru_{}_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.victim, args.student))
     for fn in flist:
         m = rp.match(fn)
         if m:
@@ -399,5 +339,5 @@ if __name__ == '__main__':
                 best = facc
     if lastacc <= best:
         print('New best found')
-        torch.save(student.state_dict(), './'+ path +'/'+filename)
-        torch.save(student.state_dict(), './'+ path +'/'+'best_qgru_{}.pth'.format(args.student))
+        torch.save(student.state_dict(), './gans/'+filename)
+        torch.save(student.state_dict(), './gans/'+'best_qgru_{}_{}.pth'.format(args.victim, args.student))

@@ -1,152 +1,83 @@
-import RingDataset
+from RingDataset import RingDataset, EDDSADataset
 import Models
 import os
-import argparse
 import numpy as np
-import pickle
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import random_split
+from torch.utils.data import DataLoader
 import torch.nn as nn
 import re
 import time
 from sklearn import svm
- 
+from Util import get_args, shifter, quantizer
 
-window=32 #this is fixed
-
-
-def get_args():
-    """Get all the args"""
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-            "--net",
-            type=str,
-            choices=['cnn', 'rnn', 'ff'],
-            default='cnn',
-            help='Classifier choices')
-    parser.add_argument(
-            "--testnet",
-            type=str,
-            choices=['cnn', 'rnn', 'ff'],
-            default='cnn',
-            help='Test Classifier choices')
-    parser.add_argument(
-            "--gen",
-            type=str,
-            choices=['gau', 'sin', 'adv', 'off', 'cnn', 'rnn', 'mlp'],
-            default='adv',
-            help='Generator choices')
-    parser.add_argument(
-            "--threshold",
-            type=int,
-            default='42',
-            help='number of samples threshold')
-    parser.add_argument(
-            "--epochs",
-            type=int,
-            default='150',
-            help='number of epochs')
-    parser.add_argument(
-            "--file_prefix",
-            type=str,
-            default='core4ToSlice3',
-            help='traininig dataset pkl file to load')
-    parser.add_argument(
-            "--batch_size",
-            type=int,
-            default='256',
-            help='batch size')
-    parser.add_argument(
-            "--dim",
-            type=int,
-            default='160',
-            help='internal channel dimension')
-    parser.add_argument(
-            "--lr",
-            type=float,
-            default=5e-5,
-            help='Default learning rate')
-    parser.add_argument(
-            "--amp",
-            type=float,
-            default='2.7',
-            help='noise amp scale')
-    parser.add_argument(
-            "--fresh",
-            action='store_true',
-            help='Fresh start without loading')
-
-    return parser.parse_args()
-
-def shifter(arr, window=window):
-    dup = arr[:,None,:].expand(arr.size(0), arr.size(1)+1, arr.size(1))
-    dup2 = dup.reshape(arr.size(0), arr.size(1), arr.size(1)+1)
-    shifted = dup2[:,:window,:-window]
-    return shifted
-
-def quantizer(arr, std=8):
-    return torch.round(arr*std)/std
 
 if __name__ == '__main__':
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     args = get_args()
-    dataset = RingDataset.RingDataset(args.file_prefix+'_train.pkl', threshold=args.threshold)
-    testset =  RingDataset.RingDataset(args.file_prefix+'_test.pkl', threshold=args.threshold)
-    valset = RingDataset.RingDataset(args.file_prefix+'_valid.pkl', threshold=args.threshold)
-
+    if args.victim == 'rsa':
+        file_prefix='core4ToSlice3'
+        dataset = RingDataset(file_prefix+'_train.pkl', threshold=args.window)
+        testset =  RingDataset(file_prefix+'_test.pkl', threshold=args.window)
+        valset = RingDataset(file_prefix+'_valid.pkl', threshold=args.window)
+        window = args.window
+    else:
+        file_prefix='eddsa'
+        dataset = EDDSADataset(file_prefix+'_train.pkl')
+        testset =  EDDSADataset(file_prefix+'_test.pkl')
+        valset = EDDSADataset(file_prefix+'_valid.pkl')
+        window = dataset.window
     trainset=dataset
     trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
     testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
-    
+    #TODO: no more threshold
     if args.gen == 'gau':
         gen = nn.Sequential(
-        Models.GaussianGenerator(args.threshold, scale=args.amp),
+        Models.GaussianGenerator(window, scale=args.amp),
         nn.ReLU(),
         ).cuda()
     elif args.gen == 'sin':
         gen = nn.Sequential(
-        Models.GaussianSinusoid(args.threshold, scale=args.amp),
+        Models.GaussianSinusoid(window, scale=args.amp),
         nn.ReLU(),
         ).cuda()
     elif args.gen == 'cnn':
-        gen=Models.CNNGenerator(args.threshold, scale=0.5).cuda()
+        gen=Models.CNNGenerator(window, scale=0.5).cuda()
     elif args.gen == 'adv':
-        gen=Models.RNNGenerator2(args.threshold, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./gans/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
+        gen=Models.RNNGenerator2(window, scale=0.25, dim=args.dim).cuda()
+        if os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)) and not args.fresh:
             print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./gans/best_{}_{}.pth'.format(args.gen, args.dim)))
+            gen.load_state_dict(torch.load('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)))
     elif args.gen == 'rnn':
-        gen=Models.RNNGenerator(args.threshold, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./gans/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
+        gen=Models.RNNGenerator(window, scale=0.25, dim=args.dim).cuda()
+        if os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)) and not args.fresh:
             print('Previous best found: loading the model...')
             gen.load_state_dict(torch.load('./gans/best_{}_{}.pth'.format(args.gen, args.dim)))
     elif args.gen == 'mlp':
-        gen=Models.MLPGen(args.threshold, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./gans/best_{}_{}.pth'.format(args.gen, args.dim)) and not args.fresh:
+        gen=Models.MLPGen(window, scale=0.25, dim=args.dim).cuda()
+        if os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)) and not args.fresh:
             print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./gans/best_{}_{}.pth'.format(args.gen, args.dim)))
+            gen.load_state_dict(torch.load('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)))
     elif args.gen == 'off':
-        gen=Models.OffsetGenerator(args.threshold, scale=args.amp/2).cuda()
+        gen=Models.OffsetGenerator(window, scale=args.amp/2).cuda()
     else:
         print(args.gen + ' not supported\n')
         exit(-1)
     
     if args.net == 'ff':
-        classifier = Models.MLP(args.threshold, dim=args.dim).cuda()
+        classifier = Models.MLP(window, dim=args.dim).cuda()
     elif args.net == 'rnn':
-        classifier = Models.RNNModel(args.threshold, dim=args.dim).cuda()
+        classifier = Models.RNNModel(window, dim=args.dim).cuda()
     else:
-        classifier = Models.CNNModel(args.threshold, dim=args.dim).cuda()
+        classifier = Models.CNNModel(window, dim=args.dim).cuda()
 
     if args.testnet == 'ff':
-        classifier_test = Models.MLP(args.threshold, dim=args.dim).cuda()
+        classifier_test = Models.MLP(window, dim=args.dim).cuda()
     elif args.testnet == 'rnn':
-        classifier_test = Models.RNNModel(args.threshold, dim=args.dim).cuda()
+        classifier_test = Models.RNNModel(window, dim=args.dim).cuda()
     else:
-        classifier_test = Models.CNNModel(args.threshold, dim=args.dim).cuda()
+        classifier_test = Models.CNNModel(window, dim=args.dim).cuda()
 
     
 
@@ -168,7 +99,7 @@ if __name__ == '__main__':
 
     xvar = np.array(train_x).var()
     
-    disc = Models.SVMDiscriminator(args.threshold, clf, 0.02).cuda() #discriminator
+    disc = Models.SVMDiscriminator(window, clf, 0.02).cuda() #discriminator
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr)
     
     optim_d = torch.optim.RMSprop(disc.parameters(), lr=args.lr)
@@ -178,7 +109,7 @@ if __name__ == '__main__':
     warmup = 70
     cooldown = 100
     #scale = 0.002
-    scale = 0.05
+    scale = 0.1
     for e in range(warmup):
         classifier.train()
 
@@ -231,11 +162,11 @@ if __name__ == '__main__':
             print("Warmup epoch {} \t acc {:.4f}\t dloss {}".format(e+1, macc, mloss))
             #print("zacc {:.6f}\t oneacc {:.6f}\n".format(zacc, oacc))
 
-    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr)
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=2*args.lr)
 
     optim_c_t = torch.optim.Adam(classifier_test.parameters(), lr=args.lr)
     optim_g = torch.optim.Adam(gen.parameters(), lr=args.lr)
-    optim_d = torch.optim.RMSprop(disc.parameters(), lr=args.lr)
+    optim_d = torch.optim.RMSprop(disc.parameters(), lr=2*args.lr)
     gamma = 0.97
     sched_c   = torch.optim.lr_scheduler.StepLR(optim_c, 1, gamma=gamma)
     
@@ -466,11 +397,11 @@ if __name__ == '__main__':
     print("SVM acc: {:.6f}".format(svmacc))
     lastacc = max(lastacc, svmacc)
     if args.gen == 'adv' or args.gen == 'rnn':
-        filename = "{}_{}_{:.3f}_{:.3f}.pth".format(args.gen,args.dim,lastnorm, lastacc)
+        filename = "{}_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.gen,args.dim,lastnorm, lastacc)
         flist = os.listdir('gans')
         best = 1.0
         smallest = 10.0
-        rp = re.compile(r"{}_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.gen,args.dim))
+        rp = re.compile(r"{}_{}_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.victim,args.gen,args.dim))
         for fn in flist:
             m = rp.match(fn)
             if m:
@@ -483,6 +414,6 @@ if __name__ == '__main__':
         if lastacc <= best:
             print('New best found')
             torch.save(gen.state_dict(), './gans/'+filename)
-            torch.save(gen.state_dict(), './gans/'+'best_{}_{}.pth'.format(args.gen, args.dim))
+            torch.save(gen.state_dict(), './gans/'+'best_{}_{}_{}.pth'.format(args.victim, args.gen, args.dim))
         elif lastnorm <= smallest:
             torch.save(gen.state_dict(), './gans/'+filename)
