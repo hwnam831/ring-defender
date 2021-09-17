@@ -43,28 +43,22 @@ if __name__ == '__main__':
         nn.ReLU(),
         ).cuda()
     elif args.gen == 'cnn':
-        gen=Models.CNNGenerator(window, scale=0.5).cuda()
+        gen=Models.CNNGenerator(window, scale=0.25, dim=args.dim).cuda()
     elif args.gen == 'adv':
         gen=Models.RNNGenerator2(window, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)) and not args.fresh:
-            print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)))
     elif args.gen == 'rnn':
         gen=Models.RNNGenerator(window, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)) and not args.fresh:
-            print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./gans/best_{}_{}.pth'.format(args.gen, args.dim)))
     elif args.gen == 'mlp':
         gen=Models.MLPGen(window, scale=0.25, dim=args.dim).cuda()
-        if os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)) and not args.fresh:
-            print('Previous best found: loading the model...')
-            gen.load_state_dict(torch.load('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)))
     elif args.gen == 'off':
         gen=Models.OffsetGenerator(window, scale=args.amp/2).cuda()
     else:
         print(args.gen + ' not supported\n')
         exit(-1)
-    
+    if args.gen in ['cnn', 'adv', 'rnn', 'mlp'] and \
+        os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)) and not args.fresh:
+            print('Previous best found: loading the model...')
+            gen.load_state_dict(torch.load('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)))
     if args.net == 'ff':
         classifier = Models.MLP(window, dim=args.dim).cuda()
     elif args.net == 'rnn':
@@ -108,8 +102,8 @@ if __name__ == '__main__':
     C = args.amp
     warmup = 70
     cooldown = 100
-    #scale = 0.002
-    scale = 0.1
+    scale = 0.02
+    #scale = 0.1
     for e in range(warmup):
         classifier.train()
 
@@ -396,7 +390,7 @@ if __name__ == '__main__':
     svmacc = (pred_y == test_y).sum()/len(pred_y)
     print("SVM acc: {:.6f}".format(svmacc))
     lastacc = max(lastacc, svmacc)
-    if args.gen == 'adv' or args.gen == 'rnn':
+    if args.gen in ['adv', 'rnn', 'cnn', 'mlp']:
         filename = "{}_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.gen,args.dim,lastnorm, lastacc)
         flist = os.listdir('gans')
         best = 1.0

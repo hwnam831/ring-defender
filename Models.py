@@ -270,45 +270,27 @@ class RNNModel(nn.Module):
         return out
 
 class CNNGenerator(nn.Module):
-    def __init__(self, threshold, scale=1, window=32, drop=0.2):
+    def __init__(self, window, scale=1, dim=128, drop=0.1, history=32):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Conv1d(window, 64, 1, bias=True),
-            nn.ReLU(),
-            nn.Conv1d(64, 128, 1, bias=True),
+            nn.Conv1d(history, dim, 1, bias=True),
             nn.ReLU(),
             nn.Dropout(drop)
         )
-        
-        self.resblock = nn.Sequential(
-                nn.Conv1d(128, 32, 1, bias=True),
-                nn.ReLU(),
-                ResBlock(32, 16),
-                ResBlock(32, 16),
-                nn.Conv1d(32, 64, 5, 1, 2),
-                nn.Dropout(drop),
-                nn.ReLU(),
-                #nn.MaxPool1d(2),
-                ResBlock(64, 32),
-                ResBlock(64, 32),
-                nn.Conv1d(64, 128, 5, 1, 2),
-                nn.Dropout(drop),
-                nn.ReLU(),
-                ResBlock(128, 64),
-            )
-
-        self.decoder = nn.Sequential(
-            nn.Conv1d(128, 1, 1, bias=True),
-            #nn.ReLU(),
-        )
+        self.resblock =  ResBlock(dim, dim//2)
+        self.decoder = nn.Conv1d(dim, 1, 1, bias=True)
         self.scale = scale
-    def forward(self, x):
+    def forward(self, x, distill=False):
         signal = x[:,-1,:]
         noise = self.scale*torch.randn_like(signal) #gaussian
-        out = self.encoder(x)
-        out = out + self.resblock(out)
-        out = self.decoder(out).view(out.size(0),-1)
-        return torch.relu(out+noise)
+        encoded = self.encoder(x)
+        res = self.resblock(encoded)
+        out = self.decoder(res).view(res.size(0),-1)
+        if distill:
+            return torch.relu(out+noise), (encoded, res, out)
+        else: 
+            return torch.relu(out+noise)
+
 
 class GaussianGenerator(nn.Module):
     def __init__(self, threshold, scale=1, window=32, drop=0.2):
@@ -431,7 +413,7 @@ class RNNGenerator2(nn.Module):
             return torch.relu(out+noise)
 
 class MLPGen(nn.Module):
-    def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2):
+    def __init__(self, threshold, scale=1, dim=128, window=32, drop=0.2, depth=2):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Linear(window, dim),
@@ -446,6 +428,12 @@ class MLPGen(nn.Module):
             nn.Linear(dim, dim),
             nn.ReLU()
         )
+        if depth == 1:
+            self.resblock = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.ReLU(),
+            nn.Dropout(drop)
+            )
 
         self.decoder = nn.Sequential(
             nn.Linear(dim, 1)
@@ -561,6 +549,26 @@ class QGRU2(nn.Module):
 
 
 class Distiller(nn.Module):
+    def __init__(self, threshold, tdim=256, sdim=32, lamb_d = 0.1, lamb_r = 0.1, window=32):
+        super().__init__()
+        self.map1 = nn.Linear(sdim, tdim)
+        self.map2 = nn.Linear(sdim, tdim)
+        self.criterion = nn.MSELoss()
+        self.lamb_d = lamb_d
+        self.lamb_r = lamb_r
+
+    def forward(self, s_out, t_out):
+        enc_s, res_s, out_s = s_out
+        enc_s2 = self.map1(enc_s)
+        res_s2 = self.map2(res_s)
+
+        enc_t, res_t, out_t = t_out
+        
+        l_distill = self.criterion(enc_s2, enc_t.detach()) + self.criterion(res_s2, res_t.detach())
+        l_recon = self.criterion(out_s, out_t.detach())
+        return self.lamb_d*l_distill + self.lamb_r*l_recon
+
+class CNNDistiller(nn.Module):
     def __init__(self, threshold, tdim=256, sdim=32, lamb_d = 0.1, lamb_r = 0.1, window=32):
         super().__init__()
         self.map1 = nn.Linear(sdim, tdim)
