@@ -33,7 +33,7 @@ class ResBlock(nn.Module):
 
     def forward(self, x):
         out = self.block(x)
-        out += x
+        out = out + x
         return out
 
 class CNNModel(nn.Module):
