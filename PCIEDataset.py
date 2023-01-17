@@ -10,7 +10,7 @@ import lz4.frame
 
 class PCIEDataset(Dataset):
     def __init__(self, rawdir, mode='raw', window=1024, median=8192, std=1024):
-        assert mode in ['raw', 'preprocess', 'both']
+        assert mode in ['raw', 'preprocess', 'mem', 'both']
         self.filelist = os.listdir(rawdir)
         self.rootdir = rawdir
         self.med = median
@@ -23,6 +23,16 @@ class PCIEDataset(Dataset):
             self.labels = []
             with lz4.frame.open(self.rootdir +'.lz4', 'rb') as f:
                 self.preprocessed_x , self.labels = pickle.load(f)
+        elif mode == 'mem':
+            print('preloading dataset to memory')
+            self.raw_x = []
+            self.labels = []
+            for idx in range(len(self.filelist)):
+                with open(self.rootdir +'/'+ self.filelist[idx], 'rb') as f:
+                    xarr, label = pickle.load(f)
+                self.raw_x.append(xarr)
+                self.labels.append(label)
+            print('preloading complete')
 
     def __len__(self):
         return len(self.filelist)
@@ -34,7 +44,10 @@ class PCIEDataset(Dataset):
         if self.mode == 'preprocess' or self.mode == 'both':
             preprocessed_x = self.preprocessed_x[idx]
             label = self.labels[idx]
-        if self.mode == 'raw':
+        if self.mode == 'mem':
+            xarr = self.raw_x[idx]
+            label = self.labels[idx]
+        if self.mode == 'raw' or self.mode == 'mem':
             x = xarr
         elif self.mode == 'preprocess':
             x = preprocessed_x
@@ -61,7 +74,7 @@ class AvgClassifier(nn.Module):
         mywindow = 50000
         padsize = (mywindow - raw_x.shape[-1]%mywindow)
         x = F.pad(raw_x, (0,padsize)).reshape(raw_x.shape[0], -1, mywindow)
-        x,_ = x.max(dim=-1, keepdim=True)
+        x = x.mean(dim=-1, keepdim=True)
         memory = self.blstm(x.permute(1,0,2))[0]
         hidden = self.attn(self.cls_key.expand(1,memory.shape[1],memory.shape[2]),
             torch.tanh(memory), memory)[0]
@@ -326,9 +339,10 @@ def Cooldown(clf_test, gen, trainloader, valloader, epochs=20):
     return c_matrix/totcount
 
 if __name__ == '__main__':
-    raw_dataset = PCIEDataset('./train')
-    classifier = RawClassifier(512, 128, 4).cuda()
-    gen = RawCNN(1024, 64, 6).cuda()
+    #raw_dataset = PCIEDataset('./train')
+    raw_dataset = PCIEDataset('/tmp/ramdisk')
+    classifier = RawClassifier(512, 64, 4).cuda()
+    gen = RawCNN(1024, 32, 6).cuda()
     if os.path.isfile('pcie/gen_{}_{}_{}.pth'.format(gen.window,gen.modelsize,gen.num_layers)):
         gen.load_state_dict(torch.load('pcie/gen_{}_{}_{}.pth'.format(gen.window,gen.modelsize,gen.num_layers)))
     trainset = []
@@ -338,9 +352,9 @@ if __name__ == '__main__':
             testset.append(i)
         else:
             trainset.append(i)
-    trainloader = DataLoader(raw_dataset, batch_size=8, num_workers=4, sampler=
+    trainloader = DataLoader(raw_dataset, batch_size=8, num_workers=2, sampler=
                             torch.utils.data.SubsetRandomSampler(trainset))
-    valloader = DataLoader(raw_dataset, batch_size=8, num_workers=4, sampler=
+    valloader = DataLoader(raw_dataset, batch_size=8, num_workers=2, sampler=
                             torch.utils.data.SubsetRandomSampler(testset))
     
     criterion = nn.CrossEntropyLoss()
@@ -413,9 +427,9 @@ if __name__ == '__main__':
             testset.append(i)
         else:
             trainset.append(i)
-    trainloader = DataLoader(test_dataset, batch_size=8, num_workers=4, sampler=
+    trainloader = DataLoader(test_dataset, batch_size=8, num_workers=2, sampler=
                             torch.utils.data.SubsetRandomSampler(trainset))
-    valloader = DataLoader(test_dataset, batch_size=8, num_workers=4, sampler=
+    valloader = DataLoader(test_dataset, batch_size=8, num_workers=2, sampler=
                             torch.utils.data.SubsetRandomSampler(testset))
     clf_test = RawClassifier(512,128,4).cuda()
     Cooldown(clf_test, gen, trainloader, valloader, epochs=20)
