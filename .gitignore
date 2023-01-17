@@ -13,3 +13,4 @@ victim
 *.pdf
 __pycache__/
 .vscode/
+lotr-data/
