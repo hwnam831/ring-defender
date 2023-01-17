@@ -138,8 +138,8 @@ class Env(object):
                 trainset = EDDSADataset(file_prefix+'_train.pkl')
                 testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std, window=trainset.window)
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std, window=trainset.window)
-                self.window = args.window
-                file_prefix2='eddsa_noise'
+                self.window = trainset.window
+                file_prefix2='eddsa'
                 trainset2 = EDDSADataset(file_prefix2+'_train.pkl', std=trainset.std)
                 testset2 =  EDDSADataset(file_prefix2+'_test.pkl', std=trainset.std)
                 valset2 = EDDSADataset(file_prefix2+'_valid.pkl', std=trainset.std)
@@ -155,9 +155,9 @@ class Env(object):
                 trainset = EDDSADataset(file_prefix+'_train.pkl')
                 testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std, window=trainset.window)
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std, window=trainset.window)
-                self.window = args.window
+                self.window = trainset.window
         elif args.victim == 'eddsa':
-                file_prefix='eddsa_noise'
+                file_prefix='eddsa'
                 trainset = EDDSADataset(file_prefix+'_train.pkl')
                 testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std)
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std)

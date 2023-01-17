@@ -12,8 +12,8 @@ import Util
 from Util import shifter, quantizer
 
 if __name__ == '__main__':
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
+    #torch.backends.cuda.matmul.allow_tf32 = False
+    #torch.backends.cudnn.allow_tf32 = False
     args = Util.get_args()
     env = Util.Env(args)
     
