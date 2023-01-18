@@ -1,0 +1,3 @@
+[submodule "lotr"]
+	path = lotr
+	url = https://github.com/FPSG-UIUC/lotr

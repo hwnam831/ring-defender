@@ -260,9 +260,10 @@ class Env(object):
                 
             self.disc2 = Models.SVMDiscriminator(self.window2, clf, 0.02).cuda() #discriminator
 
+#No doubleblind
 def cooldown(args, env, gen, prevgen, epochs=None):
     halfgen = gen.half()
-    halfgen.eval()
+    halfgen.train()
     lastacc = 0.0
     lastnorm = 0.0
     lastacc2 = 0.0
@@ -285,7 +286,7 @@ def cooldown(args, env, gen, prevgen, epochs=None):
             perturb = prevgen(shifted).view(shifted.size(0),-1)
             perturb2 = halfgen(shifted.half()).float().detach()
             #interleaving?
-            output = env.classifier_test(xdata[:,args.history-1:]+perturb.detach())
+            output = env.classifier_test(xdata[:,args.history-1:]+perturb2)
             loss_c = criterion(output, ydata)
             loss_c.backward()
             optim_c_t.step()
@@ -341,7 +342,7 @@ def cooldown(args, env, gen, prevgen, epochs=None):
                 perturb = prevgen(shifted).view(shifted.size(0),-1)
                 perturb2 = halfgen(shifted.half()).float().detach()
                 #interleaving?
-                output = env.classifier_test2(xdata[:,args.history-1:]+perturb.detach())
+                output = env.classifier_test2(xdata[:,args.history-1:]+perturb2)
                 loss_c = criterion(output, ydata)
                 loss_c.backward()
                 optim_c_t2.step()
