@@ -197,7 +197,7 @@ class Env(object):
                 print(args.gen + ' not supported\n')
                 exit(-1)
         self.fresh = True
-        if args.gen in ['cnn', 'adv', 'rnn', 'mlp'] and \
+        if args.gen in ['cnn', 'adv', 'rnn', 'mlp', 'rnn3'] and \
                 os.path.isfile('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)) and not args.fresh:
                 print('Previous best found: loading the model...')
                 self.gen.load_state_dict(torch.load('./gans/best_{}_{}_{}.pth'.format(args.victim,args.gen, args.dim)))

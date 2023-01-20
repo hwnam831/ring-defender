@@ -366,7 +366,7 @@ if __name__ == '__main__':
 
     lastacc, lastnorm = Util.cooldown(args, env, env.gen, env.gen2)
 
-    if args.gen in ['adv', 'rnn', 'cnn', 'mlp']:
+    if args.gen in ['adv', 'rnn', 'cnn', 'mlp', 'rnn3']:
         filename = "{}_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.gen,args.dim,lastnorm, lastacc)
         flist = os.listdir('gans')
         best = 1.0
