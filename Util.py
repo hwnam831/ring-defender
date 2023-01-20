@@ -134,12 +134,12 @@ class Env(object):
         self.both = False
         if args.victim == 'both': # 'both'
                 self.both=True
-                file_prefix='rsa_noise'
+                file_prefix='rsa2'
                 trainset = EDDSADataset(file_prefix+'_train.pkl')
                 testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std, window=trainset.window)
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std, window=trainset.window)
                 self.window = trainset.window
-                file_prefix2='eddsa'
+                file_prefix2='eddsa2'
                 trainset2 = EDDSADataset(file_prefix2+'_train.pkl', std=trainset.std)
                 testset2 =  EDDSADataset(file_prefix2+'_test.pkl', std=trainset.std)
                 valset2 = EDDSADataset(file_prefix2+'_valid.pkl', std=trainset.std)
@@ -151,13 +151,13 @@ class Env(object):
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std, window=trainset.window)
                 self.window = trainset.window
         elif args.victim == 'rsa':
-                file_prefix='rsa_noise'
+                file_prefix='rsa2'
                 trainset = EDDSADataset(file_prefix+'_train.pkl')
                 testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std, window=trainset.window)
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std, window=trainset.window)
                 self.window = trainset.window
         elif args.victim == 'eddsa':
-                file_prefix='eddsa'
+                file_prefix='eddsa2'
                 trainset = EDDSADataset(file_prefix+'_train.pkl')
                 testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std)
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std)
