@@ -12,8 +12,8 @@ import Util
 from Util import shifter, quantizer
 
 if __name__ == '__main__':
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
+    #torch.backends.cuda.matmul.allow_tf32 = False
+    #torch.backends.cudnn.allow_tf32 = False
     args = Util.get_args()
     env = Util.Env(args)
     
@@ -180,7 +180,6 @@ if __name__ == '__main__':
             optim_g.step()
 
         env.classifier.train()
-        env.gen.eval()
         for x,y in env.trainloader:
             oneratio = ydata.sum().item()/len(ydata)
             disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
@@ -295,7 +294,6 @@ if __name__ == '__main__':
                 optim_g.step()
 
             env.classifier2.train()
-            env.gen.eval()
             for x,y in env.trainloader2:
                 oneratio = ydata.sum().item()/len(ydata)
                 disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
@@ -366,7 +364,7 @@ if __name__ == '__main__':
 
     lastacc, lastnorm = Util.cooldown(args, env, env.gen, env.gen2)
 
-    if args.gen in ['adv', 'rnn', 'cnn', 'mlp']:
+    if args.gen in ['adv', 'rnn', 'cnn', 'mlp', 'rnn3']:
         filename = "{}_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.gen,args.dim,lastnorm, lastacc)
         flist = os.listdir('gans')
         best = 1.0
