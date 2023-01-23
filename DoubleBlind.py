@@ -180,7 +180,6 @@ if __name__ == '__main__':
             optim_g.step()
 
         env.classifier.train()
-        env.gen.eval()
         for x,y in env.trainloader:
             oneratio = ydata.sum().item()/len(ydata)
             disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
@@ -295,7 +294,6 @@ if __name__ == '__main__':
                 optim_g.step()
 
             env.classifier2.train()
-            env.gen.eval()
             for x,y in env.trainloader2:
                 oneratio = ydata.sum().item()/len(ydata)
                 disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros

@@ -51,7 +51,7 @@ class RingDataset(Dataset):
         return self.input_arr[idx], self.target_arr[idx]
 
 class EDDSADataset(Dataset):
-    def __init__(self, pklfile, std=16, history=32, window=None):
+    def __init__(self, pklfile, std=16, history=8, window=None):
         x_arr, y_arr = pickle.load(open(pklfile, 'rb'))
         self.offset = history-1
         self.window = window if window else x_arr.shape[1] - self.offset

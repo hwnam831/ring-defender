@@ -6,7 +6,7 @@ import Models
 import os
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 import torch.nn as nn
 import re
 import time
@@ -38,7 +38,7 @@ def get_parser():
             "--gen",
             type=str,
             choices=['gau', 'sin', 'adv', 'off', 'cnn', 'rnn', 'mlp', 'rnn3'],
-            default='adv',
+            default='rnn3',
             help='Generator choices')
     parser.add_argument(
             "--window",
@@ -48,7 +48,7 @@ def get_parser():
     parser.add_argument(
             "--history",
             type=int,
-            default='32',
+            default='8',
             help='number of samples window')
     parser.add_argument(
             "--epochs",
@@ -58,7 +58,7 @@ def get_parser():
     parser.add_argument(
             "--warmup",
             type=int,
-            default='50',
+            default='100',
             help='number of warmup epochs')
     parser.add_argument(
             "--cooldown",
@@ -73,7 +73,7 @@ def get_parser():
     parser.add_argument(
             "--dim",
             type=int,
-            default='192',
+            default='256',
             help='internal channel dimension')
     parser.add_argument(
             "--lr",
@@ -103,7 +103,7 @@ def get_parser():
     parser.add_argument(
             "--lambda_d",
             type=float,
-            default='0.02',
+            default='5.0',
             help='lambda coef for discriminator loss')   
     parser.add_argument(
             "--lambda_r",
@@ -139,11 +139,12 @@ class Env(object):
                 testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std, window=trainset.window)
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std, window=trainset.window)
                 self.window = trainset.window
-                file_prefix2='eddsa2'
-                trainset2 = EDDSADataset(file_prefix2+'_train.pkl', std=trainset.std)
-                testset2 =  EDDSADataset(file_prefix2+'_test.pkl', std=trainset.std)
-                valset2 = EDDSADataset(file_prefix2+'_valid.pkl', std=trainset.std)
-                self.window2 = trainset2.window
+                file_prefix='eddsa2'
+                trainset = EDDSADataset(file_prefix+'_train.pkl')
+                testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std)
+                valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std)
+                self.window = trainset.window
+                
         elif args.victim == 'rsa_noise':
                 file_prefix=args.victim
                 trainset = EDDSADataset(file_prefix+'_train.pkl')
@@ -162,7 +163,7 @@ class Env(object):
                 testset =  EDDSADataset(file_prefix+'_test.pkl', std=trainset.std)
                 valset = EDDSADataset(file_prefix+'_valid.pkl', std=trainset.std)
                 self.window = trainset.window
-
+        print("std: " + str(testset.std))
         self.trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
         self.testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
         self.valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
@@ -184,15 +185,15 @@ class Env(object):
         elif args.gen == 'cnn':
                 self.gen=Models.CNNGenerator(self.window, scale=0.25, dim=args.dim).cuda()
         elif args.gen == 'adv':
-                self.gen=Models.RNNGenerator2(self.window, scale=0.25, dim=args.dim).cuda()
+                self.gen=Models.RNNGenerator2(self.window, scale=0.25, dim=args.dim, window=args.history).cuda()
         elif args.gen == 'rnn3':
-                self.gen=Models.RNNGenerator3(self.window, scale=0.25, dim=args.dim).cuda()
+                self.gen=Models.RNNGenerator3(self.window, scale=0.25, dim=args.dim, window=args.history).cuda()
         elif args.gen == 'rnn':
                 self.gen=Models.RNNGenerator(self.window, scale=0.25, dim=args.dim).cuda()
         elif args.gen == 'mlp':
                 self.gen=Models.MLPGen(self.window, scale=0.25, dim=args.dim).cuda()
         elif args.gen == 'off':
-                self.gen=Models.OffsetGenerator(self.window, scale=args.amp/2).cuda()
+                self.gen=Models.OffsetGenerator(self.window, scale=args.amp).cuda()
         else:
                 print(args.gen + ' not supported\n')
                 exit(-1)
@@ -237,10 +238,10 @@ class Env(object):
                         train_x.append(p.cpu().numpy())
                 for y_i in y:
                         train_y.append(y_i.item())
-        clf = svm.SVC(gamma='auto')
+        clf = svm.SVC(gamma=0.01)
         clf.fit(train_x, train_y)
         
-        self.disc = Models.SVMDiscriminator(self.window, clf, 0.02).cuda() #discriminator
+        self.disc = Models.SVMDiscriminator(self.window, clf, 0.01).cuda() #discriminator
         if self.both:
             train_x = []
             train_y = []
@@ -255,10 +256,10 @@ class Env(object):
                                 train_x.append(p.cpu().numpy())
                         for y_i in y:
                                 train_y.append(y_i.item())
-            clf = svm.SVC(gamma='auto')
+            clf = svm.SVC(gamma=0.01)
             clf.fit(train_x, train_y)
                 
-            self.disc2 = Models.SVMDiscriminator(self.window2, clf, 0.02).cuda() #discriminator
+            self.disc2 = Models.SVMDiscriminator(self.window2, clf, 0.01).cuda() #discriminator
 
 #No doubleblind
 def cooldown(args, env, gen, prevgen, epochs=None):
@@ -274,6 +275,74 @@ def cooldown(args, env, gen, prevgen, epochs=None):
         optim_c_t2 = torch.optim.Adam(env.classifier_test2.parameters(), lr=args.lr)
     criterion=nn.CrossEntropyLoss()
     
+    train_x = []
+    train_y = []
+    test_x = []
+    test_y = []
+    with torch.no_grad():
+        for x,y in env.valloader:
+            xdata= x.cuda()
+            shifted = shifter(xdata, args.history)
+            #train classifier
+            perturb = halfgen(shifted.half()).float().view(shifted.size(0),-1)
+            perturb = quantizer(perturb)
+            perturbed_x = xdata[:,args.history-1:]+perturb
+            for p in perturbed_x:
+                train_x.append(p.cpu().numpy())
+            for y_i in y:
+                train_y.append(y_i.item())
+        for x,y in env.testloader:
+            xdata= x.cuda()
+            shifted = shifter(xdata, args.history)
+            #train classifier
+            perturb = halfgen(shifted.half()).view(shifted.size(0),-1)
+            perturb = quantizer(perturb)
+            perturbed_x = xdata[:,args.history-1:]+perturb.float()
+            for p in perturbed_x:
+                test_x.append(p.cpu().numpy())
+            for y_i in y:
+                test_y.append(y_i.item())
+    clf = svm.SVC(gamma='auto')
+    clf.fit(train_x, train_y)
+    pred_y = clf.predict(test_x)
+
+    svmacc = (pred_y == test_y).sum()/len(pred_y)
+    print("[{}]\tSVM acc: {:.6f}".format(args.victim,svmacc))
+    if env.both:
+        train_x = []
+        train_y = []
+        test_x = []
+        test_y = []
+        with torch.no_grad():
+            for x,y in env.valloader2:
+                xdata= x.cuda()
+                shifted = shifter(xdata, args.history)
+                #train classifier
+                perturb = halfgen(shifted.half()).float().view(shifted.size(0),-1)
+                perturb = quantizer(perturb)
+                perturbed_x = xdata[:,args.history-1:]+perturb
+                for p in perturbed_x:
+                        train_x.append(p.cpu().numpy())
+                for y_i in y:
+                        train_y.append(y_i.item())
+            for x,y in env.testloader2:
+                xdata= x.cuda()
+                shifted = shifter(xdata, args.history)
+                #train classifier
+                perturb = halfgen(shifted.half()).view(shifted.size(0),-1)
+                perturb = quantizer(perturb)
+                perturbed_x = xdata[:,args.history-1:]+perturb.float()
+                for p in perturbed_x:
+                        test_x.append(p.cpu().numpy())
+                for y_i in y:
+                        test_y.append(y_i.item())
+        clf = svm.SVC(gamma='auto')
+        clf.fit(train_x, train_y)
+        pred_y = clf.predict(test_x)
+
+        svmacc2 = (pred_y == test_y).sum()/len(pred_y)
+        print("[eddsa]\tSVM acc: {:.6f}".format(svmacc2))
+
     cd = epochs if epochs else args.cooldown
     for e in range(cd):
         env.classifier_test.train()
@@ -391,72 +460,6 @@ def cooldown(args, env, gen, prevgen, epochs=None):
     print("[{}]\tLast 10 acc: {:.6f}\t perturb: {:.6f}".format(args.victim, lastacc,lastnorm))
     if env.both:
         print("[eddsa]\tLast 10 acc: {:.6f}\t perturb: {:.6f}".format(lastacc2,lastnorm2)) 
-    train_x = []
-    train_y = []
-    test_x = []
-    test_y = []
-    with torch.no_grad():
-        for x,y in env.valloader:
-            xdata= x.cuda()
-            shifted = shifter(xdata, args.history)
-            #train classifier
-            perturb = prevgen(shifted).view(shifted.size(0),-1)
-            perturb = quantizer(perturb)
-            perturbed_x = xdata[:,args.history-1:]+perturb
-            for p in perturbed_x:
-                train_x.append(p.cpu().numpy())
-            for y_i in y:
-                train_y.append(y_i.item())
-        for x,y in env.testloader:
-            xdata= x.cuda()
-            shifted = shifter(xdata, args.history)
-            #train classifier
-            perturb = halfgen(shifted.half()).view(shifted.size(0),-1)
-            perturb = quantizer(perturb)
-            perturbed_x = xdata[:,args.history-1:]+perturb.float()
-            for p in perturbed_x:
-                test_x.append(p.cpu().numpy())
-            for y_i in y:
-                test_y.append(y_i.item())
-    clf = svm.SVC(gamma='auto')
-    clf.fit(train_x, train_y)
-    pred_y = clf.predict(test_x)
-
-    svmacc = (pred_y == test_y).sum()/len(pred_y)
-    print("[{}]\tSVM acc: {:.6f}".format(args.victim,svmacc))
-    if env.both:
-        train_x = []
-        train_y = []
-        test_x = []
-        test_y = []
-        with torch.no_grad():
-            for x,y in env.valloader2:
-                xdata= x.cuda()
-                shifted = shifter(xdata, args.history)
-                #train classifier
-                perturb = prevgen(shifted).view(shifted.size(0),-1)
-                perturb = quantizer(perturb)
-                perturbed_x = xdata[:,args.history-1:]+perturb
-                for p in perturbed_x:
-                        train_x.append(p.cpu().numpy())
-                for y_i in y:
-                        train_y.append(y_i.item())
-            for x,y in env.testloader2:
-                xdata= x.cuda()
-                shifted = shifter(xdata, args.history)
-                #train classifier
-                perturb = halfgen(shifted.half()).view(shifted.size(0),-1)
-                perturb = quantizer(perturb)
-                perturbed_x = xdata[:,args.history-1:]+perturb.float()
-                for p in perturbed_x:
-                        test_x.append(p.cpu().numpy())
-                for y_i in y:
-                        test_y.append(y_i.item())
-        clf = svm.SVC(gamma='auto')
-        clf.fit(train_x, train_y)
-        pred_y = clf.predict(test_x)
-
-        svmacc2 = (pred_y == test_y).sum()/len(pred_y)
-        print("[eddsa]\tSVM acc: {:.6f}".format(svmacc2))
+    
         return max((lastacc+lastacc2)/2, (svmacc+svmacc2)/2), (lastnorm+lastnorm2)/2
     return max(lastacc, svmacc), lastnorm
