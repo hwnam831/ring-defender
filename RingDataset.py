@@ -71,27 +71,3 @@ class EDDSADataset(Dataset):
     
     def __getitem__(self, idx):
         return self.input_arr[idx], self.target_arr[idx]
-
-if __name__ == '__main__':
-    file_prefix='core4ToSlice3'
-    trainset = RingDataset(file_prefix+'_train.pkl')
-    testset =  RingDataset(file_prefix+'_test.pkl', std=trainset.std)
-    valset = RingDataset(file_prefix+'_valid.pkl', std=trainset.std)
-    file_prefix2='eddsa'
-    trainset2 = EDDSADataset(file_prefix2+'_train.pkl', std=trainset.std)
-    testset2 =  EDDSADataset(file_prefix2+'_test.pkl', std=trainset.std)
-    valset2 = EDDSADataset(file_prefix2+'_valid.pkl', std=trainset.std)
-    loader = DataLoader(trainset, batch_size=4, shuffle=True)
-
-    for i in range(3):
-        idx = np.random.randint(0,len(trainset))
-        x,y = trainset.__getitem__(idx)
-        print(x)
-        print(x.mean())
-        print(x.std())
-    for i in range(3):
-        idx = np.random.randint(0,len(trainset2))
-        x,y = trainset2.__getitem__(idx)
-        print(x)
-        print(x.mean())
-        print(x.std())
