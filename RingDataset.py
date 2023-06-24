@@ -71,3 +71,21 @@ class EDDSADataset(Dataset):
     
     def __getitem__(self, idx):
         return self.input_arr[idx], self.target_arr[idx]
+    
+class LOTRDataset(Dataset):
+    def __init__(self, pklfile, std=16, med=None):
+        x_arr, y_arr = pickle.load(open(pklfile, 'rb'))
+
+        self.target_arr = y_arr
+        self.input_arr = x_arr
+        self.tracelen = x_arr.shape[1]            
+        self.med = med if med else np.median(self.input_arr)
+        self.std = std
+        self.input_arr = self.input_arr - self.med
+        self.input_arr = self.input_arr/self.std
+    
+    def __len__(self):
+        return len(self.input_arr)
+    
+    def __getitem__(self, idx):
+        return self.input_arr[idx], self.target_arr[idx]
