@@ -81,7 +81,7 @@ class FCDiscriminator(nn.Module):
     
 
 class AttnShaper(nn.Module):
-    def __init__(self, history, window, dim=32, n_patterns=16):
+    def __init__(self, history, window, amp=2.0, dim=32, n_patterns=16):
         super().__init__()
         self.history=history
         self.n_patterns=n_patterns
@@ -93,7 +93,7 @@ class AttnShaper(nn.Module):
         self.keys = nn.Parameter(torch.FloatTensor(dim, n_patterns))
         torch.nn.init.xavier_uniform_(self.keys)
         
-        self.shapes = nn.Parameter(torch.randn(n_patterns,window))
+        self.shapes = nn.Parameter(torch.rand(n_patterns,window)*amp*2)
         self.noiselevel = nn.Parameter(torch.ones(1))
     def forward(self, x, avg_scores=None):
         
@@ -113,3 +113,26 @@ class AttnShaper(nn.Module):
         signal = torch.matmul(attn_probs, self.shapes).view(x.shape[0],-1)[:,:x.shape[1]]
 
         return torch.relu(signal-x)
+
+class FCDiscriminator(nn.Module):
+    def __init__(self, window, dim=128, drop=0.1):
+        super().__init__()
+        self.fc1 = nn.Linear(window,dim)
+        #self.fc2 = nn.Linear(dim,dim)
+        self.fc3 = nn.Linear(dim,1)
+        self.FC = nn.Sequential(
+        self.fc1,
+        nn.ReLU(),
+        nn.Dropout(drop),
+        #self.fc2,
+        #nn.ReLU(),
+        #nn.Dropout(drop),
+        self.fc3,
+        )
+    def forward(self, x):
+        out = self.FC(x.view(x.size(0),-1))
+        return out.view(-1)
+    def clip(self, low=-0.01, high=0.01):
+        self.fc1.weight.data.clamp_(low, high)
+        #self.fc2.weight.data.clamp_(low, high)
+        self.fc3.weight.data.clamp_(low, high)

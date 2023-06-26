@@ -53,7 +53,7 @@ def get_parser():
     parser.add_argument(
             "--epochs",
             type=int,
-            default='100',
+            default='200',
             help='number of epochs')
     parser.add_argument(
             "--warmup",
@@ -68,7 +68,7 @@ def get_parser():
     parser.add_argument(
             "--batch_size",
             type=int,
-            default='100',
+            default='200',
             help='batch size')
     parser.add_argument(
             "--dim",
@@ -88,7 +88,7 @@ def get_parser():
     parser.add_argument(
             "--amp",
             type=float,
-            default='3.5',
+            default='3.0',
             help='noise amp scale')
     parser.add_argument(
             "--gamma",
