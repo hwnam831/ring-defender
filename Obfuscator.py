@@ -10,9 +10,9 @@ import time
 import NewModels
 import Util
 from copy import deepcopy
-import math
+from sklearn import svm
 
-def Warmup(args, trainloader, classifier, discriminator, shaper):
+def Warmup(args, trainloader,valloader, classifier, discriminator, shaper):
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
     optim_d = torch.optim.RMSprop(discriminator.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
     criterion = nn.CrossEntropyLoss()
@@ -21,7 +21,7 @@ def Warmup(args, trainloader, classifier, discriminator, shaper):
         classifier.train()
         discriminator.train()
         for x,y in trainloader:
-            xdata, ydata = x.to(device), y.to(device)
+            xdata, ydata = x.to(args.device), y.to(args.device)
             oneratio = ydata.sum().item()/len(ydata)
             disc_label = 2*(ydata.float()-oneratio)
             #train classifier
@@ -56,7 +56,7 @@ def Warmup(args, trainloader, classifier, discriminator, shaper):
                 classifier.eval()
                 discriminator.eval()
                 for x,y in valloader:
-                    xdata, ydata = x.to(device), y.to(device)
+                    xdata, ydata = x.to(args.device), y.to(args.device)
                     oneratio = ydata.sum().item()/len(ydata)
                     disc_label = 2*(ydata.float()-oneratio)
                     #train classifier
@@ -97,7 +97,7 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
         discriminator.train()
         #train both
         for x,y in trainloader:
-            xdata, ydata = x.to(device), y.to(device)
+            xdata, ydata = x.to(args.device), y.to(args.device)
             oneratio = ydata.sum().item()/len(ydata)
             disc_label = 2*(ydata.float()-oneratio)
             #train classifier
@@ -137,7 +137,7 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
 
         #train again
         for x,y in trainloader:
-            xdata, ydata = x.to(device), y.to(device)
+            xdata, ydata = x.to(args.device), y.to(args.device)
             oneratio = ydata.sum().item()/len(ydata)
             disc_label = 2*(ydata.float()-oneratio)
             #train classifier
@@ -173,11 +173,10 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
             classifier.eval()
             discriminator.eval()
             for x,y in valloader:
-                xdata, ydata = x.to(device), y.to(device)
+                xdata, ydata = x.to(args.device), y.to(args.device)
                 oneratio = ydata.sum().item()/len(ydata)
                 disc_label = 2*(ydata.float()-oneratio)
                 #train classifier
-                optim_c.zero_grad()
 
                 perturb = shaper(xdata)
                 mperturb += perturb.mean().item()
@@ -185,8 +184,6 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
                 closs += criterion(output, ydata)
                 fakes = discriminator(xdata + perturb)
                 mloss += torch.mean(fakes*disc_label).item()
-
-                optim_c.step()
 
                 pred = output.argmax(axis=-1)
                 totcorrect += (pred==ydata).sum().item()
@@ -207,27 +204,149 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
     shaper.load_state_dict(bestparams)
     return bestacc, bestnorm
 
-if __name__ == '__main__':
-    #torch.backends.cuda.matmul.allow_tf32 = False
-    #torch.backends.cudnn.allow_tf32 = False
-    args = Util.get_args()
+def train(args):
     file_prefix=args.victim
-    device = 'cuda:0'
+
+
+    trainset = LOTRDataset(file_prefix+'_train.pkl')
+    valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
+    trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
+    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
+
+    classifier = NewModels.ConvAttClassifier().to(args.device)
+    discriminator = NewModels.FCDiscriminator(window=trainset.tracelen).to(args.device)
+    shaper = NewModels.AttnShaper(amp=args.amp, history=16, window=8).to(args.device)
+    Warmup(args,trainloader, valloader, classifier, discriminator,shaper)
+    bestacc, bestnorm = Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper)
+    filename = "{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.dim,bestnorm, bestacc)
+    torch.save(shaper.state_dict(), './gans/'+filename)
+
+def evaluate(args):
+    file_prefix=args.victim
 
     trainset = LOTRDataset(file_prefix+'_train.pkl')
     testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
     valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
-    trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
     testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
+    
 
-    classifier = NewModels.ConvAttClassifier().to(device)
-    discriminator = NewModels.FCDiscriminator(window=trainset.tracelen).to(device)
-    shaper = NewModels.AttnShaper(amp=args.amp, history=16, window=8).to(device)
-    Warmup(args,trainloader,classifier, discriminator,shaper)
-    bestacc, bestnorm = Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper)
-    filename = "{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.dim,bestnorm, bestacc)
-    torch.save(shaper.state_dict(), './gans/'+filename)
+    shaper = NewModels.AttnShaper(history=16, window=8).to(args.device)
+    flist = os.listdir('gans')
+    rp = re.compile(r"{}_{}_(\d+\.\d+)_(\d+\.\d+)\.pth".format(args.victim,args.dim))
+    modeltoacc = {}
+    for fname in flist:
+        m = rp.match(fname)
+        if m:
+            shaper.load_state_dict(torch.load('./gans/'+fname))
+            print('\nEvaluating ' + fname)
+            bestacc = cooldown(args, shaper, valloader, testloader)
+            modeltoacc[fname] = bestacc
+    print(modeltoacc)
+
+
+def cooldown(args, shaper, valloader, testloader):
+    classifier = NewModels.ConvAttClassifier().to(args.device)
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
+    criterion = nn.CrossEntropyLoss()
+    shaper.train()
+
+    avgsvmacc = 0.0
+    for i in range(10):
+        train_x = []
+        train_y = []
+        test_x = []
+        test_y = []
+        with torch.no_grad():
+            for x,y in valloader:
+                xdata= x.to(args.device)
+                perturb = shaper(xdata).detach()
+                perturbed_x = xdata + perturb
+                for p in perturbed_x:
+                    train_x.append(p.cpu().numpy())
+                for y_i in y:
+                    train_y.append(y_i.item())
+            for x,y in testloader:
+                xdata= x.to(args.device)
+                perturb = shaper(xdata).detach()
+                perturbed_x = xdata + perturb
+                for p in perturbed_x:
+                    test_x.append(p.cpu().numpy())
+                for y_i in y:
+                    test_y.append(y_i.item())
+        clf = svm.SVC(gamma='auto')
+        clf.fit(train_x, train_y)
+        pred_y = clf.predict(test_x)
+
+        svmacc = (pred_y == test_y).sum()/len(pred_y)
+        print("SVM epoch {}\t acc: {:.6f}".format(i,svmacc)) 
+        avgsvmacc += svmacc/10
+
+    bestacc = 0.5
+    avgnorm = args.amp
+    avgacc = 0.5
+    for e in range(args.cooldown):
+        classifier.train()
+        for x,y in valloader:
+            xdata, ydata = x.to(args.device), y.to(args.device)
+            #train classifier
+            optim_c.zero_grad()
+
+            perturb = shaper(xdata).detach()
+            output = classifier(xdata + perturb)
+            
+            loss_c = criterion(output, ydata)
+            loss_c.backward()
+            
+            optim_c.step()
+
+            pred = output.argmax(axis=-1)
+
+        #validation
+        totcorrect = 0
+        totcount = 0
+        closs = 0.0
+        mperturb = 0.0
+        with torch.no_grad():
+            classifier.eval()
+            for x,y in testloader:
+                xdata, ydata = x.to(args.device), y.to(args.device)
+                #train classifier
+                optim_c.zero_grad()
+
+                perturb = shaper(xdata)
+                mperturb += perturb.mean().item()
+                output = classifier(xdata + perturb)
+                closs += criterion(output, ydata)
+
+
+
+                pred = output.argmax(axis=-1)
+                totcorrect += (pred==ydata).sum().item()
+                totcount += y.size(0)
+        closs = closs / len(valloader)
+        mperturb = mperturb/len(valloader)
+        macc = float(totcorrect)/totcount
+        avgnorm = avgnorm*0.9 + mperturb*0.1
+        avgacc = avgacc*0.9 + macc*0.1
+        if e%10 == 9:
+            print("Evaluate epoch {} \t acc {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}".format(
+                e+1, avgacc, closs, avgnorm))
+        if avgacc > bestacc and e > args.cooldown//2:
+            bestacc = avgacc
+    
+      
+    return max(bestacc,avgsvmacc)       
+
+
+if __name__ == '__main__':
+    #torch.backends.cuda.matmul.allow_tf32 = False
+    #torch.backends.cudnn.allow_tf32 = False
+    args = Util.get_args()
+    if args.mode == 'train':
+        train(args)
+    else:
+        evaluate(args)
 
 
     

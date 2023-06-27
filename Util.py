@@ -114,6 +114,17 @@ def get_parser():
             "--fresh",
             action='store_true',
             help='Fresh start without loading')
+    parser.add_argument(
+            "--device",
+            type=str,
+            default='cuda:0',
+            help='device to run')
+    parser.add_argument(
+            "--mode",
+            type=str,
+            choices=['train','eval'],
+            default='train',
+            help='train mode or eval mode')
 
     return parser
 
