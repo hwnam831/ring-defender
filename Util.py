@@ -43,12 +43,12 @@ def get_parser():
     parser.add_argument(
             "--window",
             type=int,
-            default='42',
+            default='8',
             help='number of samples window')
     parser.add_argument(
             "--history",
             type=int,
-            default='8',
+            default='16',
             help='number of samples window')
     parser.add_argument(
             "--epochs",
@@ -58,22 +58,27 @@ def get_parser():
     parser.add_argument(
             "--warmup",
             type=int,
-            default='100',
+            default='200',
             help='number of warmup epochs')
     parser.add_argument(
             "--cooldown",
             type=int,
-            default='100',
+            default='200',
             help='number of cooldown epochs')
     parser.add_argument(
             "--batch_size",
             type=int,
-            default='200',
+            default='256',
             help='batch size')
     parser.add_argument(
             "--dim",
             type=int,
-            default='160',
+            default='32',
+            help='internal channel dimension')
+    parser.add_argument(
+            "--n_patterns",
+            type=int,
+            default='16',
             help='internal channel dimension')
     parser.add_argument(
             "--lr",
@@ -88,7 +93,7 @@ def get_parser():
     parser.add_argument(
             "--amp",
             type=float,
-            default='3.0',
+            default='3.5',
             help='noise amp scale')
     parser.add_argument(
             "--gamma",

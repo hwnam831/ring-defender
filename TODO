@@ -1,6 +1,10 @@
-Test Convatt classifier
-Convatt discriminator?
-Build low-cost defender
-warmup with low-cost defender
-save defender and separate cooldown
-For pcie - FFT then amp/freq/
+//Test Convatt classifier
+//Convatt discriminator?
+//Build low-cost defender
+//warmup with low-cost defender
+//save defender and separate cooldown
+quantized shaper
+different dim and numpatterns
+different window?
+
+??For pcie - FFT then amp/freq/

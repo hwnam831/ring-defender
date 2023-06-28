@@ -84,7 +84,7 @@ def Warmup(args, trainloader,valloader, classifier, discriminator, shaper):
 def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper):
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr, weight_decay=args.lr/10)
     optim_d = torch.optim.RMSprop(discriminator.parameters(), lr=args.lr, weight_decay=args.lr/10)
-    optim_g = torch.optim.Adam(shaper.parameters(), lr=10*args.lr, weight_decay=args.lr)
+    optim_g = torch.optim.Adam(shaper.parameters(), lr=2*args.lr, weight_decay=args.lr/5)
     criterion = nn.CrossEntropyLoss()
     shaper.train()
     bestnorm = args.amp * 2
@@ -131,7 +131,7 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
             fake_target = 1-ydata
 
             loss_adv1 = criterion(output, fake_target)
-            loss = loss_adv1 + 0.02*loss_p + 10*loss_d
+            loss = loss_adv1 + 0.05*loss_p + 10*loss_d
             loss.backward()
             optim_g.step()
 
@@ -212,13 +212,24 @@ def train(args):
     valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
     trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
+    testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
+    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
 
     classifier = NewModels.ConvAttClassifier().to(args.device)
     discriminator = NewModels.FCDiscriminator(window=trainset.tracelen).to(args.device)
-    shaper = NewModels.AttnShaper(amp=args.amp, history=16, window=8).to(args.device)
+    shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     Warmup(args,trainloader, valloader, classifier, discriminator,shaper)
     bestacc, bestnorm = Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper)
-    filename = "{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.dim,bestnorm, bestacc)
+    model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
+    model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+    model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+    input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+    model_fp32_prepared(input_fp32)
+    qshaper = torch.ao.quantization.convert(model_fp32_prepared)
+    print('\nEvaluating')
+    bestacc = cooldown(args, qshaper, classifier, valloader, testloader)
+            
+    filename = "{}_{}x_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.window, args.dim, args.n_patterns,bestnorm, bestacc)
     torch.save(shaper.state_dict(), './gans/'+filename)
 
 def evaluate(args):
@@ -231,25 +242,31 @@ def evaluate(args):
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
     
 
-    shaper = NewModels.AttnShaper(history=16, window=8).to(args.device)
+    shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     flist = os.listdir('gans')
-    rp = re.compile(r"{}_{}_(\d+\.\d+)_(\d+\.\d+)\.pth".format(args.victim,args.dim))
+    rp = re.compile(r"{}_{}x_{}_{}_(\d+\.\d+)_(\d+\.\d+)\.pth".format(args.victim,args.window,args.dim,args.n_patterns))
     modeltoacc = {}
     for fname in flist:
         m = rp.match(fname)
         if m:
             shaper.load_state_dict(torch.load('./gans/'+fname))
+            model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
+            model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+            model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+            input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+            model_fp32_prepared(input_fp32)
+            qshaper = torch.ao.quantization.convert(model_fp32_prepared)
             print('\nEvaluating ' + fname)
-            bestacc = cooldown(args, shaper, valloader, testloader)
+            classifier = NewModels.ConvAttClassifier().to(args.device)
+            bestacc = cooldown(args, qshaper, classifier, valloader, testloader)
             modeltoacc[fname] = bestacc
     print(modeltoacc)
 
 
-def cooldown(args, shaper, valloader, testloader):
-    classifier = NewModels.ConvAttClassifier().to(args.device)
+def cooldown(args, qshaper, classifier, valloader, testloader):
+    
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
     criterion = nn.CrossEntropyLoss()
-    shaper.train()
 
     avgsvmacc = 0.0
     for i in range(10):
@@ -259,17 +276,15 @@ def cooldown(args, shaper, valloader, testloader):
         test_y = []
         with torch.no_grad():
             for x,y in valloader:
-                xdata= x.to(args.device)
-                perturb = shaper(xdata).detach()
-                perturbed_x = xdata + perturb
+                perturb = qshaper(x)
+                perturbed_x = x + perturb
                 for p in perturbed_x:
                     train_x.append(p.cpu().numpy())
                 for y_i in y:
                     train_y.append(y_i.item())
             for x,y in testloader:
-                xdata= x.to(args.device)
-                perturb = shaper(xdata).detach()
-                perturbed_x = xdata + perturb
+                perturb = qshaper(x)
+                perturbed_x = x + perturb
                 for p in perturbed_x:
                     test_x.append(p.cpu().numpy())
                 for y_i in y:
@@ -288,12 +303,12 @@ def cooldown(args, shaper, valloader, testloader):
     for e in range(args.cooldown):
         classifier.train()
         for x,y in valloader:
-            xdata, ydata = x.to(args.device), y.to(args.device)
+            xdata, ydata = x, y.to(args.device)
             #train classifier
             optim_c.zero_grad()
 
-            perturb = shaper(xdata).detach()
-            output = classifier(xdata + perturb)
+            perturb = qshaper(xdata).to(args.device)
+            output = classifier(xdata.to(args.device) + perturb)
             
             loss_c = criterion(output, ydata)
             loss_c.backward()
@@ -310,16 +325,14 @@ def cooldown(args, shaper, valloader, testloader):
         with torch.no_grad():
             classifier.eval()
             for x,y in testloader:
-                xdata, ydata = x.to(args.device), y.to(args.device)
+                xdata, ydata = x, y.to(args.device)
                 #train classifier
                 optim_c.zero_grad()
 
-                perturb = shaper(xdata)
+                perturb = qshaper(xdata).to(args.device)
                 mperturb += perturb.mean().item()
-                output = classifier(xdata + perturb)
+                output = classifier(xdata.to(args.device) + perturb)
                 closs += criterion(output, ydata)
-
-
 
                 pred = output.argmax(axis=-1)
                 totcorrect += (pred==ydata).sum().item()

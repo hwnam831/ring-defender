@@ -7,6 +7,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
 import torch.nn as nn
 import torch.nn.functional as F
+from copy import deepcopy
 
 def ConvBlockRelu(c_in, c_out, ksize, dilation=1):
     pad = ((ksize-1)//2)*dilation
@@ -84,33 +85,82 @@ class AttnShaper(nn.Module):
     def __init__(self, history, window, amp=2.0, dim=32, n_patterns=16):
         super().__init__()
         self.history=history
+        self.window=window
         self.n_patterns=n_patterns
+        self.dim = dim
+        self.n_patterns = n_patterns
+        self.amp = amp
         self.conv1 = nn.Sequential(
             nn.Conv1d(1,dim,history, stride=window),
             nn.ReLU(),
-            nn.Dropout(0.1),
         )
         self.keys = nn.Parameter(torch.FloatTensor(dim, n_patterns))
         torch.nn.init.xavier_uniform_(self.keys)
         
         self.shapes = nn.Parameter(torch.rand(n_patterns,window)*amp*2)
         self.noiselevel = nn.Parameter(torch.ones(1))
-    def forward(self, x, avg_scores=None):
+    def forward(self, x, avg_scores=None, mode='train'):
         
         padded = F.pad(x,(self.history-1, 0))
+        noise = torch.randn(padded.shape).to(padded.device)*0.1
+        #padded = padded+noise
         if avg_scores is None:
-            avg_scores = torch.rand(x.shape[0], self.n_patterns).to(x.device)
+            avg_scores = torch.randn(x.shape[0], self.n_patterns).to(x.device)
             avg_scores = avg_scores - avg_scores.mean(dim=-1,keepdim=True)
         out = self.conv1(padded[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
         attn_scores = F.relu6(torch.matmul(out, self.keys))
         probs = []
         for score in attn_scores:
-            prob = torch.softmax(score-avg_scores, dim=-1)
+            if mode == 'inference':
+                prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
+                                 num_classes=self.n_patterns)
+            else:
+                prob = torch.softmax(score-avg_scores, dim=-1)
             avg_scores = avg_scores + prob - 1/self.n_patterns
             probs.append(prob)
         attn_probs = torch.stack(probs,dim=1) #N,S,C
        
         signal = torch.matmul(attn_probs, self.shapes).view(x.shape[0],-1)[:,:x.shape[1]]
+
+        return torch.relu(signal-x)
+
+class QuantizedShaper(nn.Module):
+    def __init__(self, shaper):
+        super().__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.history=shaper.history
+        self.n_patterns=shaper.n_patterns
+        self.dim = shaper.dim
+        self.window = shaper.window
+        self.amp = shaper.amp
+        self.conv1 = deepcopy(shaper.conv1)
+        self.keys = nn.Linear(self.dim,self.n_patterns,bias=False)
+        self.keys.weight.data = shaper.keys.data.permute(1,0)
+        self.shapes = nn.Linear(self.n_patterns, self.window, bias=False)
+        self.shapes.weight.data = shaper.shapes.data.permute(1,0)
+        self.relu6 = nn.ReLU6()
+        self.relu = nn.ReLU()
+        self.dequant = torch.ao.quantization.DeQuantStub()
+        self.QF = nn.quantized.FloatFunctional()
+    def forward(self, x, avg_scores=None):
+        avg_scores = torch.randn(x.shape[0], self.n_patterns).to(x.device)
+        avg_scores = avg_scores - avg_scores.mean(dim=-1,keepdim=True)
+        #avg_scores = self.quant(avg_scores)
+        padded = F.pad(x,(self.history-1, 0))
+        #noise = torch.randn(padded.shape)*0.1
+        #padded = self.quant(padded + noise)   
+        padded = self.quant(padded)    
+        out = self.conv1(padded[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
+        attn_scores = self.dequant(self.relu6(self.keys(out)))
+        probs = []
+        for score in attn_scores:
+            prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
+                                num_classes=self.n_patterns).float()
+            avg_scores = avg_scores + prob - 1/self.n_patterns
+            probs.append(prob)
+        attn_probs = self.quant(torch.stack(probs,dim=1)) #N,S,C
+       
+        signal = self.dequant(self.shapes(attn_probs).view(x.shape[0],-1)[:,:x.shape[1]])
 
         return torch.relu(signal-x)
 
