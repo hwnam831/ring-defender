@@ -73,12 +73,12 @@ def get_parser():
     parser.add_argument(
             "--dim",
             type=int,
-            default='32',
+            default='16',
             help='internal channel dimension')
     parser.add_argument(
             "--n_patterns",
             type=int,
-            default='16',
+            default='32',
             help='internal channel dimension')
     parser.add_argument(
             "--lr",
