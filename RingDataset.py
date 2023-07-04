@@ -1,8 +1,10 @@
 import numpy as np
 import pickle
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-
+import NewModels
 class RingDataset(Dataset):
     def __init__(self, pklfile, threshold=40, history=32, std=None):
         datalist = pickle.load(open(pklfile, 'rb'))
@@ -89,3 +91,76 @@ class LOTRDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.input_arr[idx], self.target_arr[idx]
+
+
+if __name__=='__main__':
+    file_prefix='eddsa'
+    trainset = LOTRDataset(file_prefix+'_train.pkl')
+    valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
+    trainloader = DataLoader(trainset, batch_size=128, num_workers=4, shuffle=True)
+    valloader = DataLoader(valset, batch_size=128, num_workers=4, shuffle=True)
+    testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
+    testloader = DataLoader(testset, batch_size=128, num_workers=4)
+
+    classifier = NewModels.ConvAttClassifier().to('cuda:0')
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=2e-4, weight_decay=2e-5)
+
+    criterion = nn.CrossEntropyLoss()
+
+    for e in range(200):
+        classifier.train()
+
+        for x,y in trainloader:
+            xdata, ydata = x.to('cuda:0'), y.to('cuda:0')
+            oneratio = ydata.sum().item()/len(ydata)
+            disc_label = 2*(ydata.float()-oneratio)
+            #train classifier
+            optim_c.zero_grad()
+
+            output = classifier(xdata)
+
+
+            
+            loss_c = criterion(output, ydata)
+
+            loss_c.backward()
+            
+
+
+            optim_c.step()
+
+            pred = output.argmax(axis=-1)
+
+    
+
+        if (e+1)%10 == 0:
+            totcorrect = 0
+            totcount = 0
+            mloss = 0.0
+            closs = 0.0
+            mperturb = 0.0
+            with torch.no_grad():
+                classifier.eval()
+
+                for x,y in valloader:
+                    xdata, ydata = x.to('cuda:0'), y.to('cuda:0')
+                    oneratio = ydata.sum().item()/len(ydata)
+                    disc_label = 2*(ydata.float()-oneratio)
+                    #train classifier
+                    optim_c.zero_grad()
+
+
+                    output = classifier(xdata)
+                    closs += criterion(output, ydata)
+
+                    optim_c.step()
+
+                    pred = output.argmax(axis=-1)
+                    totcorrect += (pred==ydata).sum().item()
+                    totcount += y.size(0)
+            mloss = mloss / len(valloader)
+            closs = closs / len(valloader)
+            mperturb = mperturb/len(valloader)
+            macc = float(totcorrect)/totcount
+            print("Warmup epoch {} \t acc {:.4f}\t dloss {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}".format(
+                e+1, macc, mloss, closs, mperturb))
