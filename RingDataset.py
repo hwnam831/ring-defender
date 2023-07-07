@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import NewModels
+import sys
 class RingDataset(Dataset):
     def __init__(self, pklfile, threshold=40, history=32, std=None):
         datalist = pickle.load(open(pklfile, 'rb'))
@@ -94,15 +95,22 @@ class LOTRDataset(Dataset):
 
 
 if __name__=='__main__':
-    file_prefix='eddsa'
+    file_prefix='rsa'
+    if len(sys.argv) > 1:
+        file_prefix = sys.argv[1]
+    
     trainset = LOTRDataset(file_prefix+'_train.pkl')
+    print("Train size: "+ str(len(trainset)))
     valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
-    trainloader = DataLoader(trainset, batch_size=128, num_workers=4, shuffle=True)
-    valloader = DataLoader(valset, batch_size=128, num_workers=4, shuffle=True)
+    print("Valid size: "+ str(len(valset)))
+    trainloader = DataLoader(trainset, batch_size=256, num_workers=4, shuffle=True)
+    valloader = DataLoader(valset, batch_size=256, num_workers=4, shuffle=True)
     testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
-    testloader = DataLoader(testset, batch_size=128, num_workers=4)
+    print("Test size: "+ str(len(testset)))
+    testloader = DataLoader(testset, batch_size=256, num_workers=4)
 
     classifier = NewModels.ConvAttClassifier().to('cuda:0')
+    #classifier = NewModels.ConvClassifier().to('cuda:0')
     optim_c = torch.optim.Adam(classifier.parameters(), lr=2e-4, weight_decay=2e-5)
 
     criterion = nn.CrossEntropyLoss()
@@ -110,7 +118,7 @@ if __name__=='__main__':
     for e in range(200):
         classifier.train()
 
-        for x,y in trainloader:
+        for x,y in valloader:
             xdata, ydata = x.to('cuda:0'), y.to('cuda:0')
             oneratio = ydata.sum().item()/len(ydata)
             disc_label = 2*(ydata.float()-oneratio)
@@ -142,7 +150,7 @@ if __name__=='__main__':
             with torch.no_grad():
                 classifier.eval()
 
-                for x,y in valloader:
+                for x,y in testloader:
                     xdata, ydata = x.to('cuda:0'), y.to('cuda:0')
                     oneratio = ydata.sum().item()/len(ydata)
                     disc_label = 2*(ydata.float()-oneratio)

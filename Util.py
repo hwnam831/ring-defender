@@ -53,7 +53,7 @@ def get_parser():
     parser.add_argument(
             "--epochs",
             type=int,
-            default='200',
+            default='300',
             help='number of epochs')
     parser.add_argument(
             "--warmup",
@@ -63,7 +63,7 @@ def get_parser():
     parser.add_argument(
             "--cooldown",
             type=int,
-            default='200',
+            default='300',
             help='number of cooldown epochs')
     parser.add_argument(
             "--batch_size",
@@ -103,12 +103,12 @@ def get_parser():
     parser.add_argument(
             "--lambda_h",
             type=float,
-            default='0.01',
+            default='0.02',
             help='lambda coef for hinge loss')
     parser.add_argument(
             "--lambda_d",
             type=float,
-            default='5.0',
+            default='2.0',
             help='lambda coef for discriminator loss')   
     parser.add_argument(
             "--lambda_r",
@@ -130,6 +130,11 @@ def get_parser():
             choices=['train','eval'],
             default='train',
             help='train mode or eval mode')
+    parser.add_argument(
+            "--cross",
+            action='store_true',
+            help='cross evaluate')
+    
 
     return parser
 

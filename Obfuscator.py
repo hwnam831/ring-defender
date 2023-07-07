@@ -131,7 +131,7 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
             fake_target = 1-ydata
 
             loss_adv1 = criterion(output, fake_target)
-            loss = loss_adv1 + 0.05*loss_p + 10*loss_d
+            loss = loss_adv1 + args.lambda_h*loss_p + args.lambda_d*loss_d
             loss.backward()
             optim_g.step()
 
@@ -227,9 +227,9 @@ def train(args):
     model_fp32_prepared(input_fp32)
     qshaper = torch.ao.quantization.convert(model_fp32_prepared)
     print('\nEvaluating')
-    bestacc = cooldown(args, qshaper, classifier, valloader, testloader)
+    bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
             
-    filename = "{}_{}x_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.window, args.dim, args.n_patterns,bestnorm, bestacc)
+    filename = "{}_{}x_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.window, args.dim, args.n_patterns,mperturb, bestacc)
     torch.save(shaper.state_dict(), './gans/'+filename)
 
 def evaluate(args):
@@ -244,7 +244,11 @@ def evaluate(args):
 
     shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     flist = os.listdir('gans')
-    rp = re.compile(r"{}_{}x_{}_{}_(\d+\.\d+)_(\d+\.\d+)\.pth".format(args.victim,args.window,args.dim,args.n_patterns))
+    reverse = {'rsa':'eddsa', 'eddsa':'rsa'}
+    victim = args.victim
+    if args.cross:
+        victim = reverse[args.victim]
+    rp = re.compile(r"{}_{}x_{}_{}_(\d+\.\d+)_(\d+\.\d+)\.pth".format(victim,args.window,args.dim,args.n_patterns))
     modeltoacc = {}
     for fname in flist:
         m = rp.match(fname)
@@ -258,8 +262,8 @@ def evaluate(args):
             qshaper = torch.ao.quantization.convert(model_fp32_prepared)
             print('\nEvaluating ' + fname)
             classifier = NewModels.ConvAttClassifier().to(args.device)
-            bestacc = cooldown(args, qshaper, classifier, valloader, testloader)
-            modeltoacc[fname] = bestacc
+            bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+            modeltoacc[fname] = (bestacc, mperturb)
     print(modeltoacc)
 
 
@@ -341,7 +345,11 @@ def cooldown(args, qshaper, classifier, valloader, testloader):
         mperturb = mperturb/len(valloader)
         macc = float(totcorrect)/totcount
         avgnorm = avgnorm*0.9 + mperturb*0.1
+        
         avgacc = avgacc*0.9 + macc*0.1
+        if e==0:
+            avgnorm = mperturb
+            avgacc = macc
         if e%10 == 9:
             print("Evaluate epoch {} \t acc {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}".format(
                 e+1, avgacc, closs, avgnorm))
@@ -349,7 +357,7 @@ def cooldown(args, qshaper, classifier, valloader, testloader):
             bestacc = avgacc
     
       
-    return max(bestacc,avgsvmacc)       
+    return max(bestacc,avgsvmacc), mperturb
 
 
 if __name__ == '__main__':
