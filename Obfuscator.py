@@ -210,12 +210,12 @@ def train(args):
 
     trainset = LOTRDataset(file_prefix+'_train.pkl')
     valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
-    trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=4, shuffle=True)
-    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
+    trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=8, shuffle=True)
+    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=8, shuffle=True)
     testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
-    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
+    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=8)
 
-    classifier = NewModels.ConvAttClassifier().to(args.device)
+    classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
     discriminator = NewModels.FCDiscriminator(window=trainset.tracelen).to(args.device)
     shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     Warmup(args,trainloader, valloader, classifier, discriminator,shaper)
@@ -238,8 +238,8 @@ def evaluate(args):
     trainset = LOTRDataset(file_prefix+'_train.pkl')
     testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
     valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
-    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=4)
-    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=4, shuffle=True)
+    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=8)
+    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=8, shuffle=True)
     
 
     shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
@@ -261,7 +261,8 @@ def evaluate(args):
             model_fp32_prepared(input_fp32)
             qshaper = torch.ao.quantization.convert(model_fp32_prepared)
             print('\nEvaluating ' + fname)
-            classifier = NewModels.ConvAttClassifier().to(args.device)
+            #classifier = NewModels.ConvAttClassifier().to(args.device)
+            classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
             bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
             modeltoacc[fname] = (bestacc, mperturb)
     print(modeltoacc)
@@ -273,6 +274,7 @@ def cooldown(args, qshaper, classifier, valloader, testloader):
     criterion = nn.CrossEntropyLoss()
 
     avgsvmacc = 0.0
+    before=time.time()
     for i in range(10):
         train_x = []
         train_y = []
@@ -341,30 +343,49 @@ def cooldown(args, qshaper, classifier, valloader, testloader):
                 pred = output.argmax(axis=-1)
                 totcorrect += (pred==ydata).sum().item()
                 totcount += y.size(0)
-        closs = closs / len(valloader)
-        mperturb = mperturb/len(valloader)
+        closs = closs / len(testloader)
+        mperturb = mperturb/len(testloader)
         macc = float(totcorrect)/totcount
         avgnorm = avgnorm*0.9 + mperturb*0.1
         
         avgacc = avgacc*0.9 + macc*0.1
+
         if e==0:
             avgnorm = mperturb
             avgacc = macc
         if e%10 == 9:
-            print("Evaluate epoch {} \t acc {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}".format(
-                e+1, avgacc, closs, avgnorm))
+            elapsed = time.time() - before
+            before += elapsed
+            print("Evaluate epoch {} \t acc {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}\t time: {: .4f}".format(
+                e+1, avgacc, closs, avgnorm, elapsed))
         if avgacc > bestacc and e > args.cooldown//2:
             bestacc = avgacc
     
       
     return max(bestacc,avgsvmacc), mperturb
 
-
+def eval_noisegen(args):
+    if args.gen == 'gau':
+        shaper = NewModels.GaussianGenerator(args.amp)
+    elif args.gen == 'sin':
+        shaper = NewModels.GaussianSinusoid(args.amp)
+    else:
+        shaper = NewModels.OffsetGenerator(args.amp)
+    file_prefix=args.victim
+    trainset = LOTRDataset(file_prefix+'_train.pkl')
+    testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
+    valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
+    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=8)
+    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=8, shuffle=True)
+    classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
+    cooldown(args, shaper, classifier,valloader,testloader)
 if __name__ == '__main__':
     #torch.backends.cuda.matmul.allow_tf32 = False
     #torch.backends.cudnn.allow_tf32 = False
     args = Util.get_args()
-    if args.mode == 'train':
+    if args.gen in ['gau', 'sin', 'off']:
+        eval_noisegen(args)
+    elif args.mode == 'train':
         train(args)
     else:
         evaluate(args)

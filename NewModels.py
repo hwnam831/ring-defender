@@ -220,3 +220,84 @@ class FCDiscriminator(nn.Module):
         self.fc1.weight.data.clamp_(low, high)
         #self.fc2.weight.data.clamp_(low, high)
         self.fc3.weight.data.clamp_(low, high)
+
+
+    
+class GaussianGenerator(nn.Module):
+    def __init__(self, amp):
+        super().__init__()
+        self.amp = amp
+    def forward(self, x):
+        
+        offset = torch.rand([x.size(0),1],device=x.device).expand_as(x) * self.amp
+        signal = torch.randn_like(x)*(self.amp-offset) + offset
+
+        return torch.relu(signal-x)
+
+class GaussianSinusoid(nn.Module):
+    def __init__(self, amp):
+        super().__init__()
+        self.amp = amp
+    def forward(self, x):
+        offset = torch.rand([x.size(0),1],device=x.device).expand_as(x) * self.amp
+        freq = torch.rand([x.size(0),1],device=x.device).expand_as(x)
+        
+        omega = np.pi*freq
+        theta = torch.rand([x.size(0),1],device=x.device)*(2*np.pi)
+        t = torch.arange(x.size(1),device=x.device)[None,:] + theta[:,None]
+        sinu = (self.amp-offset)*torch.sin((omega*t))
+        #perturb = torch.randn([x.size(0), self.threshold], device=x.device) #[N, S]
+        signal = sinu + offset
+
+        return torch.relu(signal-x)
+    
+class OffsetGenerator(nn.Module):
+    def __init__(self, amp):
+        super().__init__()
+        self.amp = amp
+    def forward(self,x):
+        #assuming N,C,S
+        signal = torch.ones_like(x)*self.amp
+
+        return torch.relu(signal-x)
+    
+class CNNModel(nn.Module):
+    def __init__(self, tracelen, dim=128, drop=0.1):
+        super().__init__()
+
+        self.CNN = nn.Sequential(
+            nn.Conv1d(1, 32, 11, 1, 5),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(32, 16),
+            nn.Conv1d(32, 64, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+            ResBlock(64, 32),
+            nn.Conv1d(64, 128, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(128, 64),
+            nn.Conv1d(128, 256, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+        )
+        with torch.no_grad():
+            testinput = torch.rand([1,1,tracelen])
+            testoutput = self.CNN(testinput)
+            fcdim = testoutput.shape[2]*256
+        self.FC = nn.Sequential(
+            nn.Linear(fcdim, 512),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            nn.Linear(512,512),
+            nn.ReLU(),
+            nn.Dropout(drop),
+            nn.Linear(512,2)
+        )
+    def forward(self, x):
+        out = self.CNN(x.view(x.size(0),1,x.size(1)))
+        out = self.FC(out.view(out.size(0),-1))
+        return out
