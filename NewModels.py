@@ -244,7 +244,7 @@ class GaussianSinusoid(nn.Module):
         
         omega = np.pi*freq
         theta = torch.rand([x.size(0),1],device=x.device)*(2*np.pi)
-        t = torch.arange(x.size(1),device=x.device)[None,:] + theta[:,None]
+        t = torch.arange(x.size(1),device=x.device)[None,:] + theta
         sinu = (self.amp-offset)*torch.sin((omega*t))
         #perturb = torch.randn([x.size(0), self.threshold], device=x.device) #[N, S]
         signal = sinu + offset
