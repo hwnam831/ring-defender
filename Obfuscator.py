@@ -253,7 +253,7 @@ def evaluate(args):
     for fname in flist:
         m = rp.match(fname)
         if m:
-            shaper.load_state_dict(torch.load('./gans/'+fname))
+            shaper.load_state_dict(torch.load('./gans/'+fname, map_location=args.device))
             model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
             model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
             model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
