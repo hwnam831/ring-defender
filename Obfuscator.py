@@ -84,7 +84,7 @@ def Warmup(args, trainloader,valloader, classifier, discriminator, shaper):
 def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper):
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr, weight_decay=args.lr/10)
     optim_d = torch.optim.RMSprop(discriminator.parameters(), lr=args.lr, weight_decay=args.lr/10)
-    optim_g = torch.optim.Adam(shaper.parameters(), lr=2*args.lr, weight_decay=args.lr/5)
+    optim_g = torch.optim.RMSprop(shaper.parameters(), lr=5*args.lr, weight_decay=args.lr/2)
     criterion = nn.CrossEntropyLoss()
     shaper.train()
     bestnorm = args.amp * 2
