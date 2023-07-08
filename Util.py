@@ -37,7 +37,7 @@ def get_parser():
     parser.add_argument(
             "--gen",
             type=str,
-            choices=['gau', 'sin', 'adv', 'off', 'cnn', 'rnn', 'mlp', 'rnn3'],
+            choices=['gau', 'sin', 'adv', 'off', 'cnn', 'rnn', 'mlp', 'rnn3', 'shaper'],
             default='adv',
             help='Generator choices')
     parser.add_argument(
