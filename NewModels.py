@@ -157,6 +157,53 @@ class AttnShaper(nn.Module):
         signal = torch.matmul(attn_probs, self.shapes).view(x.shape[0],-1)[:,:x.shape[1]]
 
         return torch.relu(signal-x)
+    
+
+class GaussianShaper(nn.Module):
+    def __init__(self, history, window, amp=2.0, dim=32, n_patterns=16):
+        super().__init__()
+        self.history=history
+        self.window=window
+        self.n_patterns=n_patterns
+        self.dim = dim
+        self.n_patterns = n_patterns
+        self.amp = amp
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(1,dim,history, stride=window),
+            nn.ReLU(),
+        )
+        self.keys = nn.Parameter(torch.FloatTensor(dim, n_patterns))
+        torch.nn.init.xavier_uniform_(self.keys)
+        
+        self.shapes = nn.Parameter(torch.rand(n_patterns,2)*amp*2) #offset, amp
+        
+    def forward(self, x, avg_scores=None, mode='train'):
+        
+        padded = F.pad(x,(self.history-1, 0))
+
+        #padded = padded+noise
+        if avg_scores is None:
+            avg_scores = torch.randn(x.shape[0], self.n_patterns).to(x.device)
+            avg_scores = avg_scores - avg_scores.mean(dim=-1,keepdim=True)
+        out = self.conv1(padded[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
+        attn_scores = F.relu6(torch.matmul(out, self.keys))
+        probs = []
+        for score in attn_scores:
+            if mode == 'inference':
+                prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
+                                 num_classes=self.n_patterns)
+            else:
+                prob = torch.softmax(score-avg_scores, dim=-1)
+            avg_scores = avg_scores + prob - 1/self.n_patterns
+            probs.append(prob)
+        attn_probs = torch.stack(probs,dim=1) #N,S,C
+       
+        shapeparams = torch.matmul(attn_probs, self.shapes) #N,S,2
+        offset = shapeparams[:,:,0:1].expand(shapeparams.shape[0],shapeparams.shape[1],self.window)
+        noise = torch.randn_like(offset) * shapeparams[:,:,1:2]
+        signal = (offset + noise).view(x.shape[0],-1)[:,:x.shape[1]]
+        return torch.relu(signal-x)
+
 
 class QuantizedShaper(nn.Module):
     def __init__(self, shaper):

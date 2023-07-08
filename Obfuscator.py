@@ -217,19 +217,26 @@ def train(args):
 
     classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
     discriminator = NewModels.FCDiscriminator(window=trainset.tracelen).to(args.device)
+
     shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    if args.gen == 'adv':
+        shaper = NewModels.GaussianShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     Warmup(args,trainloader, valloader, classifier, discriminator,shaper)
     bestacc, bestnorm = Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper)
-    model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
-    model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
-    model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
-    input_fp32 = torch.randn(args.batch_size, valset.tracelen)
-    model_fp32_prepared(input_fp32)
-    qshaper = torch.ao.quantization.convert(model_fp32_prepared)
-    print('\nEvaluating')
-    bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+    if args.gen == 'adv':
+        print('\nEvaluating')
+        bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
+    else:
+        model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
+        model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+        model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+        input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+        model_fp32_prepared(input_fp32)
+        qshaper = torch.ao.quantization.convert(model_fp32_prepared)
+        print('\nEvaluating')
+        bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
             
-    filename = "{}_{}x_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.window, args.dim, args.n_patterns,mperturb, bestacc)
+    filename = "{}_{}_{}x_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.gen,args.window, args.dim, args.n_patterns,mperturb, bestacc)
     torch.save(shaper.state_dict(), './gans/'+filename)
 
 def evaluate(args):
@@ -248,7 +255,7 @@ def evaluate(args):
     victim = args.victim
     if args.cross:
         victim = reverse[args.victim]
-    rp = re.compile(r"{}_{}x_{}_{}_(\d+\.\d+)_(\d+\.\d+)\.pth".format(victim,args.window,args.dim,args.n_patterns))
+    rp = re.compile(r"{}_{}_{}x_{}_{}_(\d+\.\d+)_(\d+\.\d+)\.pth".format(victim, args.gen, args.window,args.dim,args.n_patterns))
     modeltoacc = {}
     for fname in flist:
         m = rp.match(fname)
