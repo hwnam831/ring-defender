@@ -337,7 +337,7 @@ class QuantizedShaper(nn.Module):
        
         signal = self.dequant(self.shapes(attn_probs).view(x.shape[0],-1)[:,:x.shape[1]])
 
-        return torch.relu(signal-x)
+        return torch.relu(signal)
 
 class FCDiscriminator(nn.Module):
     def __init__(self, window, dim=128, drop=0.1):
@@ -370,9 +370,9 @@ class GaussianGenerator(nn.Module):
         self.amp = amp
     def forward(self, x):
         
-        #offset = torch.rand([x.size(0),1],device=x.device).expand_as(x) * self.amp
-        #signal = torch.randn_like(x)*(self.amp-offset) + offset
-        signal = torch.randn_like(x)*(self.amp)*2
+        offset = torch.rand([x.size(0),1],device=x.device).expand_as(x) * self.amp * 2
+        signal = torch.randn_like(x)*(self.amp*2-offset) + offset
+        #signal = torch.randn_like(x)*(self.amp)*2
         return torch.relu(signal-x)
 
 class GaussianSinusoid(nn.Module):
@@ -451,11 +451,11 @@ class RNNShaper(nn.Module):
         self.dim = dim
         self.amp = amp
         self.conv1 = nn.Sequential(
-            nn.Conv1d(1,dim,history, stride=window),
+            nn.Conv1d(1,dim,history, stride=1),
             nn.ReLU(),
         )
         self.shaper = nn.GRU(dim,dim, num_layers=1)
-        self.fc = nn.Linear(dim,window)
+        self.fc = nn.Linear(dim,1)
         self.noiselevel = nn.Parameter(torch.rand(1))
         
     def forward(self, x):
@@ -467,6 +467,6 @@ class RNNShaper(nn.Module):
         out = self.conv1(padded[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
         noise = torch.randn_like(out)*self.noiselevel
         out = out + noise
-        out, _ = self.shaper(out, torch.randn(1,x.shape[0], self.dim).to(x.device))
-        signal = self.fc(out).view(x.shape[0],-1)[:,:x.shape[1]]
+        out, _ = self.shaper(out)
+        signal = self.fc(out).view(x.shape[0],-1)
         return torch.relu(signal-x)

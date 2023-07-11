@@ -84,9 +84,9 @@ def Warmup(args, trainloader,valloader, classifier, discriminator, shaper):
 def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper):
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr, weight_decay=args.lr/10)
     optim_d = torch.optim.RMSprop(discriminator.parameters(), lr=args.lr, weight_decay=args.lr/10)
-    optim_g = torch.optim.RMSprop(shaper.parameters(), lr=2*args.lr, weight_decay=args.lr/5)
+    optim_g = torch.optim.Adam(shaper.parameters(), lr=args.lr, weight_decay=args.lr/2)
     if args.gen == 'rnn':
-        optim_g = torch.optim.Adam(shaper.parameters(), lr=2*args.lr, weight_decay=args.lr/5)
+        optim_g = torch.optim.Adam(shaper.parameters(), lr=args.lr, weight_decay=args.lr/2)
     criterion = nn.CrossEntropyLoss()
     shaper.train()
     bestnorm = args.amp * 2
@@ -422,7 +422,8 @@ def eval_noisegen(args):
     testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=8)
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=8, shuffle=True)
     classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
-    cooldown(args, shaper, classifier,valloader,testloader)
+    macc, mperturb = cooldown(args, shaper, classifier,valloader,testloader)
+    print("macc: {}\tmperturb: {}".format(macc,mperturb))
 if __name__ == '__main__':
     #torch.backends.cuda.matmul.allow_tf32 = False
     #torch.backends.cudnn.allow_tf32 = False
