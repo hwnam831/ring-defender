@@ -395,7 +395,7 @@ def cooldown(args, qshaper, classifier, valloader, testloader):
             bestacc = avgacc
     
       
-    return max(bestacc,avgsvmacc), mperturb
+    return max(avgacc,avgsvmacc), mperturb
 
 def eval_noisegen(args):
     if args.gen == 'gau':
