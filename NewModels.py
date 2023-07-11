@@ -442,3 +442,31 @@ class CNNModel(nn.Module):
         out = self.CNN(x.view(x.size(0),1,x.size(1)))
         out = self.FC(out.view(out.size(0),-1))
         return out
+    
+class RNNShaper(nn.Module):
+    def __init__(self, history, window, amp=2.0, dim=32):
+        super().__init__()
+        self.history=history
+        self.window=window
+        self.dim = dim
+        self.amp = amp
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(1,dim,history, stride=window),
+            nn.ReLU(),
+        )
+        self.shaper = nn.GRU(dim,dim, num_layers=1)
+        self.fc = nn.Linear(dim,window)
+        self.noiselevel = nn.Parameter(torch.rand(1))
+        
+    def forward(self, x):
+        
+        padded = F.pad(x,(self.history-1, 0))
+
+        #padded = padded+noise
+        
+        out = self.conv1(padded[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
+        noise = torch.randn_like(out)*self.noiselevel
+        out = out + noise
+        out, _ = self.shaper(out, torch.randn(1,x.shape[0], self.dim).to(x.device))
+        signal = self.fc(out).view(x.shape[0],-1)[:,:x.shape[1]]
+        return torch.relu(signal-x)

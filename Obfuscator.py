@@ -84,7 +84,9 @@ def Warmup(args, trainloader,valloader, classifier, discriminator, shaper):
 def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper):
     optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr, weight_decay=args.lr/10)
     optim_d = torch.optim.RMSprop(discriminator.parameters(), lr=args.lr, weight_decay=args.lr/10)
-    optim_g = torch.optim.RMSprop(shaper.parameters(), lr=5*args.lr, weight_decay=args.lr/2)
+    optim_g = torch.optim.RMSprop(shaper.parameters(), lr=2*args.lr, weight_decay=args.lr/5)
+    if args.gen == 'rnn':
+        optim_g = torch.optim.Adam(shaper.parameters(), lr=2*args.lr, weight_decay=args.lr/5)
     criterion = nn.CrossEntropyLoss()
     shaper.train()
     bestnorm = args.amp * 2
@@ -223,6 +225,8 @@ def train(args):
         shaper = NewModels.GaussianShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     elif args.gen == 'shaper':
         shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    elif args.gen == 'rnn':
+        shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim).to(args.device)
     Warmup(args,trainloader, valloader, classifier, discriminator,shaper)
     bestacc, bestnorm = Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper)
     if args.gen == 'adv':
@@ -235,6 +239,9 @@ def train(args):
         print('\nEvaluating')
         bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
     elif args.gen=='shaper':
+        print('\nEvaluating')
+        bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
+    elif args.gen == 'rnn':
         print('\nEvaluating')
         bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
     else:
@@ -265,6 +272,8 @@ def evaluate(args):
         shaper = NewModels.GaussianShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
     elif args.gen == 'shaper':
         shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    elif args.gen == 'rnn':
+        shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim).to(args.device)
     flist = os.listdir('gans')
     reverse = {'rsa':'eddsa', 'eddsa':'rsa'}
     victim = args.victim
@@ -284,6 +293,8 @@ def evaluate(args):
                 model_fp32_prepared(input_fp32)
                 qshaper = torch.ao.quantization.convert(model_fp32_prepared)
             elif args.gen == 'shaper':
+                qshaper=shaper
+            elif args.gen == 'rnn':
                 qshaper=shaper
             else:
                 model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()

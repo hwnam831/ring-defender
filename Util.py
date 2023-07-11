@@ -103,7 +103,7 @@ def get_parser():
     parser.add_argument(
             "--lambda_h",
             type=float,
-            default='0.1',
+            default='0.02',
             help='lambda coef for hinge loss')
     parser.add_argument(
             "--lambda_d",
