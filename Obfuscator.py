@@ -97,6 +97,7 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
     for e in range(args.epochs):
         classifier.train()
         discriminator.train()
+        shaper.train()
         #train both
         for x,y in trainloader:
             xdata, ydata = x.to(args.device), y.to(args.device)
@@ -174,6 +175,7 @@ def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, sh
         with torch.no_grad():
             classifier.eval()
             discriminator.eval()
+            shaper.train()
             for x,y in valloader:
                 xdata, ydata = x.to(args.device), y.to(args.device)
                 oneratio = ydata.sum().item()/len(ydata)
@@ -223,6 +225,11 @@ def train(args):
     shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     if args.gen == 'adv':
         shaper = NewModels.GaussianShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    if args.gen == 'qat':
+        shaper = NewModels.QATShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
+        shaper.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
+        torch.quantization.prepare_qat(shaper, inplace=False)
+        shaper = shaper.to(args.device)
     elif args.gen == 'shaper':
         shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     elif args.gen == 'rnn':
@@ -238,8 +245,13 @@ def train(args):
         qshaper = torch.ao.quantization.convert(model_fp32_prepared)
         print('\nEvaluating')
         bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
-    elif args.gen=='shaper':
+    elif args.gen=='qat':
         print('\nEvaluating')
+        shaper.to('cpu')
+        qshaper = torch.ao.quantization.convert(shaper)
+        qshaper.eval()
+        bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+    elif args.gen=='shaper':
         bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
     elif args.gen == 'rnn':
         print('\nEvaluating')

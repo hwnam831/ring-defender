@@ -37,7 +37,7 @@ def get_parser():
     parser.add_argument(
             "--gen",
             type=str,
-            choices=['gau', 'sin', 'adv', 'off', 'cnn', 'rnn', 'mlp', 'rnn3', 'shaper'],
+            choices=['gau', 'sin', 'adv', 'off', 'cnn', 'rnn', 'mlp', 'rnn3', 'shaper', 'qat'],
             default='adv',
             help='Generator choices')
     parser.add_argument(
@@ -53,12 +53,12 @@ def get_parser():
     parser.add_argument(
             "--epochs",
             type=int,
-            default='300',
+            default='200',
             help='number of epochs')
     parser.add_argument(
             "--warmup",
             type=int,
-            default='200',
+            default='100',
             help='number of warmup epochs')
     parser.add_argument(
             "--cooldown",

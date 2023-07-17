@@ -127,6 +127,7 @@ class AttnShaper(nn.Module):
         self.conv1 = nn.Sequential(
             nn.Conv1d(1,dim,history, stride=window),
             nn.ReLU(),
+            nn.Dropout(0.5),
         )
         self.keys = nn.Parameter(torch.FloatTensor(dim, n_patterns))
         torch.nn.init.xavier_uniform_(self.keys)
@@ -171,41 +172,37 @@ class AttnShaper2(nn.Module):
             nn.Conv1d(1,dim,history, stride=window),
             nn.ReLU(),
         )
-        self.keys = nn.Linear(dim, n_patterns*2, bias=False)
+
+        self.keys=nn.Linear(dim, self.n_patterns, bias=False)
+        offsets = torch.arange(n_patterns,dtype=torch.float32).view(n_patterns,1)*self.amp*3/n_patterns
+        self.register_buffer('offsets',offsets,persistent=False)
         self.relu6 = nn.ReLU6()
-        self.shapes = nn.Parameter(torch.rand(n_patterns,window)*amp*2.5)
-        self.noiselevel = nn.Parameter(torch.rand(n_patterns,1)*amp)
+
         #noiselevel = torch.arange(n_patterns,dtype=torch.float32).view(n_patterns,1)/n_patterns
         #self.register_buffer('noiselevel',noiselevel, persistent=False)
-    def forward(self, x, avg_scores=None, mode='train'):
+    def forward(self, x, avg_scores=None,mode='train'):
         
         padded = F.pad(x,(self.history-1, 0))
-        
-        #padded = padded+noise
         if avg_scores is None:
             avg_scores = torch.randn(x.shape[0], self.n_patterns).to(x.device)
             avg_scores = avg_scores - avg_scores.mean(dim=-1,keepdim=True)
+        
         out = self.conv1(padded[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
-        scores = self.relu6(self.keys(out))
-        attn_scores = scores[:,:,:self.n_patterns]
-        noise_scores = scores[:,:,self.n_patterns:]
-        noise_prob = torch.softmax(noise_scores, dim=-1)
-        #noise_level = torch.matmul(noise_prob, self.noiselevel).permute(1,0,2) #N,S,1
+        attn_scores = F.relu6(self.keys(out))
         probs = []
         for score in attn_scores:
             if mode == 'inference':
                 prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
-                                 num_classes=self.n_patterns).float()
+                                 num_classes=self.n_patterns)
             else:
                 prob = torch.softmax(score-avg_scores, dim=-1)
             avg_scores = avg_scores + prob - 1/self.n_patterns
             probs.append(prob)
         attn_probs = torch.stack(probs,dim=1) #N,S,C
-        noise_level = torch.matmul(attn_probs, self.noiselevel)
-       
-        signal = torch.matmul(attn_probs, self.shapes)#N,S/W,W
-        noise = torch.randn_like(signal) * noise_level
-        signal = (signal + noise).view(x.shape[0],-1)[:,:x.shape[1]]
+        offset = torch.matmul(attn_probs, self.offsets).expand(x.shape[0],attn_probs.shape[1],self.window).reshape(x.shape[0],-1)[:,:x.shape[1]]
+        noise = torch.randn_like(offset)
+
+        signal = (offset+noise).view(x.shape[0],-1)[:,:x.shape[1]]
 
         return torch.relu(signal-x)    
 
@@ -286,8 +283,9 @@ class GaussianQuantizedShaper(nn.Module):
         attn_scores = self.dequant(self.relu6(self.keys(out)))
         probs = []
         for score in attn_scores:
-            prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
-                                num_classes=self.n_patterns).float()
+            #prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
+            #                    num_classes=self.n_patterns).float()
+            prob = torch.softmax(score-avg_scores, dim=-1)
             avg_scores = avg_scores + prob - 1/self.n_patterns
             probs.append(prob)
         attn_probs = self.quant(torch.stack(probs,dim=1)) #N,S,C
@@ -469,4 +467,52 @@ class RNNShaper(nn.Module):
         out = out + noise
         out, _ = self.shaper(out)
         signal = self.fc(out).view(x.shape[0],-1)
+        return torch.relu(signal-x)
+    
+
+class QATShaper(nn.Module):
+    def __init__(self, history, window, amp=2.0, dim=32, n_patterns=16):
+        super().__init__()
+        self.history=history
+        self.window=window
+        self.n_patterns=n_patterns
+        self.dim = dim
+        self.n_patterns = n_patterns
+        self.amp = amp
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(1,dim,history, stride=window),
+            nn.ReLU(),
+        )
+        self.keys = nn.Linear(self.dim,self.n_patterns,bias=False)
+
+        self.shapes = nn.Linear(self.n_patterns, 2, bias=False)
+        self.shapes.weight.data = torch.rand_like(self.shapes.weight.data)*amp*2
+
+        self.relu6 = nn.ReLU6()
+        self.relu = nn.ReLU()
+        self.dequant = torch.ao.quantization.DeQuantStub()
+        self.quant = torch.ao.quantization.QuantStub()
+    def forward(self, x, avg_scores=None):
+        
+        padded = F.pad(x,(self.history-1, 0))
+
+        padded = self.quant(padded) 
+        if avg_scores is None:
+            avg_scores = torch.randn(x.shape[0], self.n_patterns).to(x.device)
+            avg_scores = avg_scores - avg_scores.mean(dim=-1,keepdim=True)
+        out = self.conv1(padded[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
+        attn_scores = self.dequant(self.relu6(self.keys(out)))
+        probs = []
+        for score in attn_scores:
+            #prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
+            #                    num_classes=self.n_patterns).float()
+            prob = torch.softmax(score-avg_scores, dim=-1)
+            avg_scores = avg_scores + prob - 1/self.n_patterns
+            probs.append(prob)
+        attn_probs = self.quant(torch.stack(probs,dim=1)) #N,S,C
+       
+        shapeparams = self.dequant(self.shapes(attn_probs)) #N,S,2
+        offset = shapeparams[:,:,0:1].expand(shapeparams.shape[0],shapeparams.shape[1],self.window)
+        noise = torch.randn_like(offset) * shapeparams[:,:,1:2]
+        signal = (offset + noise).view(x.shape[0],-1)[:,:x.shape[1]]
         return torch.relu(signal-x)
