@@ -86,6 +86,7 @@ class LOTRDataset(Dataset):
         self.std = std
         self.input_arr = self.input_arr - self.med
         self.input_arr = self.input_arr/self.std
+        print("Tracelen: " + str(self.tracelen))
     
     def __len__(self):
         return len(self.input_arr)

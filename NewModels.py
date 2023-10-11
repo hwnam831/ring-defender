@@ -98,6 +98,31 @@ class ConvClassifier(nn.Module):
             torch.tanh(memory), memory)[0]
         return self.fc(hidden.view(-1,self.dim)) #1,N,C->N,C
     
+class RNNClassifier(nn.Module):
+    def __init__(self, dim=128, num_classes=2, drop=0.1):
+        super().__init__()
+        self.dim = dim
+        self.CNN = nn.Sequential(
+            nn.Conv1d(1, self.dim, 11, 1, 5),
+            nn.Dropout(drop),
+            nn.ReLU(),
+        )
+        self.RNN = nn.LSTM(dim, dim, num_layers=2)
+        self.tf = nn.TransformerEncoder(encoder_layer=nn.TransformerEncoderLayer(dim,nhead=2,dim_feedforward=256),
+                                        num_layers=2,norm=nn.LayerNorm(dim))
+        self.cls_key = nn.Parameter(torch.FloatTensor(1, dim))
+        self.attn = nn.MultiheadAttention(dim, 1)
+        self.fc = nn.Linear(dim, num_classes)
+        torch.nn.init.xavier_uniform_(self.cls_key)
+
+    def forward(self, input):
+        #N,S input
+        
+        memory = self.CNN(input[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
+        memory, _ = self.RNN(memory)
+        hidden = self.attn(self.cls_key.expand(1,memory.shape[1],memory.shape[2]),
+            torch.tanh(memory), memory)[0]
+        return self.fc(hidden.view(-1,self.dim)) #1,N,C->N,C
 class FCDiscriminator(nn.Module):
     def __init__(self, tracelen, dim=128, drop=0.1):
         super().__init__()
@@ -188,6 +213,7 @@ class AttnShaper2(nn.Module):
             avg_scores = avg_scores - avg_scores.mean(dim=-1,keepdim=True)
         
         out = self.conv1(padded[:,None,:]).permute(2,0,1) #N,C,S -> S,N,C
+        out = F.dropout(out,0.25)
         attn_scores = F.relu6(self.keys(out))
         probs = []
         for score in attn_scores:
@@ -195,14 +221,18 @@ class AttnShaper2(nn.Module):
                 prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
                                  num_classes=self.n_patterns)
             else:
-                prob = torch.softmax(score-avg_scores, dim=-1)
+                #prob = torch.softmax(score-avg_scores, dim=-1)
+                prob = torch.softmax(score,dim=-1)
             avg_scores = avg_scores + prob - 1/self.n_patterns
             probs.append(prob)
-        attn_probs = torch.stack(probs,dim=1) #N,S,C
-        offset = torch.matmul(attn_probs, self.offsets).expand(x.shape[0],attn_probs.shape[1],self.window).reshape(x.shape[0],-1)[:,:x.shape[1]]
-        noise = torch.randn_like(offset)
+        attn_probs = torch.stack(probs,dim=1).to(dtype=x.dtype) #N,S,C
+        #offset = torch.matmul(attn_probs, self.offsets).expand(x.shape[0],attn_probs.shape[1],self.window).reshape(x.shape[0],-1)[:,:x.shape[1]]
+        #noise = torch.randn_like(offset)
+        offset = torch.matmul(attn_probs, self.offsets).expand(x.shape[0],attn_probs.shape[1],self.window)
+        noise = torch.randn_like(offset) * offset/2
+        signal = (offset+noise).reshape(x.shape[0],-1)[:,:x.shape[1]]
 
-        signal = (offset+noise).view(x.shape[0],-1)[:,:x.shape[1]]
+        signal = signal.view(x.shape[0],-1)[:,:x.shape[1]]
 
         return torch.relu(signal-x)    
 
@@ -369,7 +399,7 @@ class GaussianGenerator(nn.Module):
     def forward(self, x):
         
         offset = torch.rand([x.size(0),1],device=x.device).expand_as(x) * self.amp * 2
-        signal = torch.randn_like(x)*(self.amp*2-offset) + offset
+        signal = torch.randn_like(x)*(offset)/2 + offset
         #signal = torch.randn_like(x)*(self.amp)*2
         return torch.relu(signal-x)
 
@@ -401,18 +431,13 @@ class OffsetGenerator(nn.Module):
         return torch.relu(signal-x)
     
 class CNNModel(nn.Module):
-    def __init__(self, tracelen, dim=128, drop=0.1):
+    def __init__(self, tracelen,drop=0.1):
         super().__init__()
 
         self.CNN = nn.Sequential(
-            nn.Conv1d(1, 32, 11, 1, 5),
+            nn.Conv1d(1, 64, 11, 1, 5),
             nn.Dropout(drop),
             nn.ReLU(),
-            ResBlock(32, 16),
-            nn.Conv1d(32, 64, 5, 2, 2),
-            nn.Dropout(drop),
-            nn.ReLU(),
-            #nn.MaxPool1d(2),
             ResBlock(64, 32),
             nn.Conv1d(64, 128, 5, 2, 2),
             nn.Dropout(drop),
@@ -421,12 +446,99 @@ class CNNModel(nn.Module):
             nn.Conv1d(128, 256, 3, 1, 1),
             nn.Dropout(drop),
             nn.ReLU(),
+            ResBlock(256, 128),
+            nn.Conv1d(256, 512, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
             #nn.MaxPool1d(2),
         )
         with torch.no_grad():
             testinput = torch.rand([1,1,tracelen])
             testoutput = self.CNN(testinput)
-            fcdim = testoutput.shape[2]*256
+            fcdim = testoutput.shape[2]*512
+        self.FC = nn.Sequential(
+            nn.Linear(fcdim, 1024),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            nn.Linear(1024,1024),
+            nn.ReLU(),
+            nn.Dropout(drop),
+            nn.Linear(1024,2)
+        )
+    def forward(self, x):
+        out = self.CNN(x.view(x.size(0),1,x.size(1)))
+        out = self.FC(out.view(out.size(0),-1))
+        return out
+
+class CNNModelWide(nn.Module):
+    def __init__(self, tracelen,drop=0.1):
+        super().__init__()
+
+        self.CNN = nn.Sequential(
+            nn.Conv1d(1, 96, 11, 1, 5),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(96, 48),
+            nn.Conv1d(96, 192, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(192, 92),
+            nn.Conv1d(192, 384, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(384, 192),
+            nn.Conv1d(384, 768, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+        )
+        with torch.no_grad():
+            testinput = torch.rand([1,1,tracelen])
+            testoutput = self.CNN(testinput)
+            fcdim = testoutput.shape[2]*768
+        self.FC = nn.Sequential(
+            nn.Linear(fcdim, 1536),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            nn.Linear(1536,1536),
+            nn.ReLU(),
+            nn.Dropout(drop),
+            nn.Linear(1536,2)
+        )
+    def forward(self, x):
+        out = self.CNN(x.view(x.size(0),1,x.size(1)))
+        out = self.FC(out.view(out.size(0),-1))
+        return out
+
+class CNNModelDeep(nn.Module):
+    def __init__(self, tracelen, dim=128, drop=0.1):
+        super().__init__()
+
+        self.CNN = nn.Sequential(
+            nn.Conv1d(1, 64, 11, 1, 5),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(64, 32),
+            ResBlock(64, 32),
+            nn.Conv1d(64, 128, 5, 2, 2),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(128, 64),
+            ResBlock(128, 64),
+            nn.Conv1d(128, 256, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            ResBlock(256, 128),
+            ResBlock(256, 128),
+            nn.Conv1d(256, 512, 3, 1, 1),
+            nn.Dropout(drop),
+            nn.ReLU(),
+            #nn.MaxPool1d(2),
+        )
+        with torch.no_grad():
+            testinput = torch.rand([1,1,tracelen])
+            testoutput = self.CNN(testinput)
+            fcdim = testoutput.shape[2]*512
         self.FC = nn.Sequential(
             nn.Linear(fcdim, 512),
             nn.Dropout(drop),

@@ -38,7 +38,7 @@ def get_parser():
             "--gen",
             type=str,
             choices=['gau', 'sin', 'adv', 'off', 'cnn', 'rnn', 'mlp', 'rnn3', 'shaper', 'qat'],
-            default='adv',
+            default='shaper',
             help='Generator choices')
     parser.add_argument(
             "--window",
@@ -53,17 +53,17 @@ def get_parser():
     parser.add_argument(
             "--epochs",
             type=int,
-            default='200',
+            default='100',
             help='number of epochs')
     parser.add_argument(
             "--warmup",
             type=int,
-            default='100',
+            default='50',
             help='number of warmup epochs')
     parser.add_argument(
             "--cooldown",
             type=int,
-            default='300',
+            default='100',
             help='number of cooldown epochs')
     parser.add_argument(
             "--batch_size",
@@ -78,7 +78,7 @@ def get_parser():
     parser.add_argument(
             "--n_patterns",
             type=int,
-            default='32',
+            default='16',
             help='internal channel dimension')
     parser.add_argument(
             "--lr",
@@ -93,7 +93,7 @@ def get_parser():
     parser.add_argument(
             "--amp",
             type=float,
-            default='3.5',
+            default='4.5',
             help='noise amp scale')
     parser.add_argument(
             "--gamma",

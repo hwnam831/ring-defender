@@ -222,49 +222,58 @@ def train(args):
     classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
     discriminator = NewModels.FCDiscriminator(window=trainset.tracelen).to(args.device)
 
-    shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     if args.gen == 'adv':
-        shaper = NewModels.GaussianShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+        shaper = NewModels.GaussianShaper(history=args.window*args.history, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     if args.gen == 'qat':
-        shaper = NewModels.QATShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
-        shaper.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
-        torch.quantization.prepare_qat(shaper, inplace=False)
-        shaper = shaper.to(args.device)
+        shaper = NewModels.GaussianShaper(history=args.window*args.history, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+        #shaper = NewModels.QATShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
+        #shaper.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
+        #shaper = torch.quantization.prepare_qat(shaper, inplace=False)
+        #shaper = shaper.to(args.device)
     elif args.gen == 'shaper':
-        shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+        shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     elif args.gen == 'rnn':
-        shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim).to(args.device)
+        shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim).to(args.device)
     Warmup(args,trainloader, valloader, classifier, discriminator,shaper)
     bestacc, bestnorm = Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper)
     if args.gen == 'adv':
-        model_fp32 = NewModels.GaussianQuantizedShaper(shaper).to('cpu').eval()
-        model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
-        model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
-        input_fp32 = torch.randn(args.batch_size, valset.tracelen)
-        model_fp32_prepared(input_fp32)
-        qshaper = torch.ao.quantization.convert(model_fp32_prepared)
+        #model_fp32 = NewModels.GaussianQuantizedShaper(shaper).to('cpu').eval()
+        #model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+        #model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+        #input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+        #model_fp32_prepared(input_fp32)
+        #qshaper = torch.ao.quantization.convert(model_fp32_prepared)
         print('\nEvaluating')
-        bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+        #bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+        bestacc, mperturb = cooldown_half(args, shaper.half(), classifier, valloader, testloader)
     elif args.gen=='qat':
         print('\nEvaluating')
-        shaper.to('cpu')
-        qshaper = torch.ao.quantization.convert(shaper)
-        qshaper.eval()
+        shaper.to('cpu').eval()
+        #qshaper = torch.ao.quantization.convert(shaper, inplace=False)
+        #qshaper.eval()
+        qshaper = torch.ao.quantization.quantize_dynamic(
+            shaper,
+            {torch.nn.Linear},
+            dtype=torch.qint8
+        )
         bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
     elif args.gen=='shaper':
-        bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
+        #bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
+        bestacc, mperturb = cooldown_half(args, shaper.half(), classifier, valloader, testloader)
     elif args.gen == 'rnn':
         print('\nEvaluating')
         bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
     else:
-        model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
-        model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
-        model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
-        input_fp32 = torch.randn(args.batch_size, valset.tracelen)
-        model_fp32_prepared(input_fp32)
-        qshaper = torch.ao.quantization.convert(model_fp32_prepared)
+        #model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
+        #model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+        #model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+        #input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+        #model_fp32_prepared(input_fp32)
+        #qshaper = torch.ao.quantization.convert(model_fp32_prepared)
         print('\nEvaluating')
-        bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+        #bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+        bestacc, mperturb = cooldown_half(args, shaper.half(), classifier, valloader, testloader)
             
     filename = "{}_{}_{}x_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.gen,args.window, args.dim, args.n_patterns,mperturb, bestacc)
     torch.save(shaper.state_dict(), './gans/'+filename)
@@ -279,13 +288,13 @@ def evaluate(args):
     valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=8, shuffle=True)
     
 
-    shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     if args.gen == 'adv':
-        shaper = NewModels.GaussianShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
+        shaper = NewModels.GaussianShaper(history=args.window*args.history, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
     elif args.gen == 'shaper':
-        shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+        shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     elif args.gen == 'rnn':
-        shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim).to(args.device)
+        shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim).to(args.device)
     flist = os.listdir('gans')
     reverse = {'rsa':'eddsa', 'eddsa':'rsa'}
     victim = args.victim
@@ -306,6 +315,10 @@ def evaluate(args):
                 qshaper = torch.ao.quantization.convert(model_fp32_prepared)
             elif args.gen == 'shaper':
                 qshaper=shaper
+                classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
+                bestacc, mperturb = cooldown_half(args, shaper.half(), classifier, valloader, testloader)
+                modeltoacc[fname] = (bestacc, mperturb)
+                continue
             elif args.gen == 'rnn':
                 qshaper=shaper
             else:
@@ -394,6 +407,101 @@ def cooldown(args, qshaper, classifier, valloader, testloader):
                 perturb = qshaper(xdata).to(args.device)
                 mperturb += perturb.mean().item()
                 output = classifier(xdata.to(args.device) + perturb)
+                closs += criterion(output, ydata)
+
+                pred = output.argmax(axis=-1)
+                totcorrect += (pred==ydata).sum().item()
+                totcount += y.size(0)
+        closs = closs / len(testloader)
+        mperturb = mperturb/len(testloader)
+        macc = float(totcorrect)/totcount
+        avgnorm = avgnorm*0.9 + mperturb*0.1
+        
+        avgacc = avgacc*0.9 + macc*0.1
+
+        if e==0:
+            avgnorm = mperturb
+            avgacc = macc
+        if e%10 == 9:
+            elapsed = time.time() - before
+            before += elapsed
+            print("Evaluate epoch {} \t acc {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}\t time: {: .4f}".format(
+                e+1, avgacc, closs, avgnorm, elapsed))
+        if avgacc > bestacc and e > args.cooldown//2:
+            bestacc = avgacc
+    
+      
+    return max(avgacc,avgsvmacc), mperturb
+def cooldown_half(args, qshaper, classifier, valloader, testloader):
+    
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
+    criterion = nn.CrossEntropyLoss()
+
+    avgsvmacc = 0.0
+    before=time.time()
+    for i in range(10):
+        train_x = []
+        train_y = []
+        test_x = []
+        test_y = []
+        with torch.no_grad():
+            for x,y in valloader:
+                perturb = qshaper(x.to(args.device).half()).float().cpu()
+                perturbed_x = x + perturb
+                for p in perturbed_x:
+                    train_x.append(p.cpu().numpy())
+                for y_i in y:
+                    train_y.append(y_i.item())
+            for x,y in testloader:
+                perturb = qshaper(x.to(args.device).half()).float().cpu()
+                perturbed_x = x + perturb
+                for p in perturbed_x:
+                    test_x.append(p.cpu().numpy())
+                for y_i in y:
+                    test_y.append(y_i.item())
+        clf = svm.SVC(gamma='auto')
+        clf.fit(train_x, train_y)
+        pred_y = clf.predict(test_x)
+
+        svmacc = (pred_y == test_y).sum()/len(pred_y)
+        print("SVM epoch {}\t acc: {:.6f}".format(i,svmacc)) 
+        avgsvmacc += svmacc/10
+
+    bestacc = 0.5
+    avgnorm = args.amp
+    avgacc = 0.5
+    for e in range(args.cooldown):
+        classifier.train()
+        for x,y in valloader:
+            xdata, ydata = x.to(args.device).half(), y.to(args.device)
+            #train classifier
+            optim_c.zero_grad()
+
+            perturb = qshaper(xdata).float()
+            output = classifier(xdata.float() + perturb)
+            
+            loss_c = criterion(output, ydata)
+            loss_c.backward()
+            
+            optim_c.step()
+
+            pred = output.argmax(axis=-1)
+
+        #validation
+        totcorrect = 0
+        totcount = 0
+        closs = 0.0
+        mperturb = 0.0
+        with torch.no_grad():
+            classifier.eval()
+            for x,y in testloader:
+                xdata, ydata = x.to(args.device).half(), y.to(args.device)
+                #train classifier
+                optim_c.zero_grad()
+
+                perturb = qshaper(xdata).float()
+                mperturb += perturb.mean().item()
+                output = classifier(xdata.float() + perturb)
                 closs += criterion(output, ydata)
 
                 pred = output.argmax(axis=-1)
