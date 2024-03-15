@@ -218,7 +218,7 @@ class AttnShaper2(nn.Module):
         probs = []
         for score in attn_scores:
             if mode == 'inference':
-                prob = F.one_hot(torch.argmax(score-avg_scores, dim=-1), 
+                prob = F.one_hot(torch.argmax(score, dim=-1), 
                                  num_classes=self.n_patterns)
             else:
                 #prob = torch.softmax(score-avg_scores, dim=-1)
