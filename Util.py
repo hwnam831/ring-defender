@@ -93,7 +93,7 @@ def get_parser():
     parser.add_argument(
             "--amp",
             type=float,
-            default='4.5',
+            default='4.0',
             help='noise amp scale')
     parser.add_argument(
             "--gamma",
