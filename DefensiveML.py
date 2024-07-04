@@ -1,4 +1,4 @@
-from RingDataset import RingDataset, EDDSADataset
+from RingDataset import LOTRDataset
 import Models
 import os
 import numpy as np
@@ -7,383 +7,574 @@ from torch.utils.data import DataLoader
 import torch.nn as nn
 import re
 import time
-from sklearn import svm
+import NewModels
 import Util
-from Util import shifter, quantizer
+from copy import deepcopy
+from sklearn import svm
 
-if __name__ == '__main__':
-    #torch.backends.cuda.matmul.allow_tf32 = False
-    #torch.backends.cudnn.allow_tf32 = False
-    args = Util.get_args()
-    env = Util.Env(args)
-    
-    optim_c = torch.optim.Adam(env.classifier.parameters(), lr=args.lr)
-    optim_d = torch.optim.RMSprop(env.disc.parameters(), lr=args.lr)
+def Warmup(args, trainloader,valloader, classifier, discriminator, shaper):
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
+    optim_d = torch.optim.RMSprop(discriminator.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
     criterion = nn.CrossEntropyLoss()
-    criterion2 = nn.BCELoss()
-    C = args.amp
-    scale = args.lambda_h
-    #scale = 0.1
+    shaper.train()
     for e in range(args.warmup):
-        env.classifier.train()
-        env.disc.train()
-        totcorrect = 0
-        totcount = 0
-
-        mloss = 0.0
-        for x,y in env.trainloader:
-            xdata, ydata = x.cuda(), y.cuda()
+        classifier.train()
+        discriminator.train()
+        for x,y in trainloader:
+            xdata, ydata = x.to(args.device), y.to(args.device)
             oneratio = ydata.sum().item()/len(ydata)
             disc_label = 2*(ydata.float()-oneratio)
-            shifted = shifter(xdata, args.history)
             #train classifier
             optim_c.zero_grad()
             optim_d.zero_grad()
+            perturb = shaper(xdata).detach()
+            output = classifier(xdata + perturb)
+            fakes = discriminator(xdata + perturb)
 
-            perturb = env.gen(shifted).view(shifted.size(0),-1)
-            p_input = xdata[:,args.history-1:]+perturb.detach()
-            output = env.classifier(p_input)
-
-            fakes = env.disc(p_input)
+            
             loss_c = criterion(output, ydata)
-            loss_c.backward()
-
             loss_d = torch.mean(fakes*disc_label)
-            mloss = mloss + loss_d.item()
+            loss_c.backward()
+            
             loss_d.backward()
-            optim_c.step()
 
+            optim_c.step()
             optim_d.step()
-            env.disc.clip()
+            discriminator.clip()
 
             pred = output.argmax(axis=-1)
-            totcorrect += (pred==ydata).sum().item()
-            totcount += y.size(0)
 
-        mloss = mloss / len(env.trainloader)
-        macc = float(totcorrect)/totcount
-
+    
 
         if (e+1)%10 == 0:
-            print("Warmup epoch {} \t acc {:.4f}\t dloss {}".format(e+1, macc, mloss))
-
-    if env.both:
-        optim_c2 = torch.optim.Adam(env.classifier2.parameters(), lr=args.lr)
-        optim_d2 = torch.optim.RMSprop(env.disc2.parameters(), lr=args.lr)
-        for e in range(args.warmup):
-            env.classifier2.train()
-            env.disc2.train()
             totcorrect = 0
             totcount = 0
-
             mloss = 0.0
-            for x,y in env.trainloader2:
-                xdata, ydata = x.cuda(), y.cuda()
-                oneratio = ydata.sum().item()/len(ydata)
-                disc_label = 2*(ydata.float()-oneratio)
-                shifted = shifter(xdata, args.history)
-                #train classifier
-                optim_c2.zero_grad()
-                optim_d2.zero_grad()
+            closs = 0.0
+            mperturb = 0.0
+            with torch.no_grad():
+                classifier.eval()
+                discriminator.eval()
+                for x,y in valloader:
+                    xdata, ydata = x.to(args.device), y.to(args.device)
+                    oneratio = ydata.sum().item()/len(ydata)
+                    disc_label = 2*(ydata.float()-oneratio)
+                    #train classifier
+                    optim_c.zero_grad()
 
-                perturb = env.gen(shifted).view(shifted.size(0),-1)
-                p_input = xdata[:,args.history-1:]+perturb.detach()
-                output = env.classifier2(p_input)
+                    perturb = shaper(xdata)
+                    mperturb += perturb.mean().item()
+                    output = classifier(xdata + perturb)
+                    closs += criterion(output, ydata)
+                    fakes = discriminator(xdata + perturb)
+                    mloss += torch.mean(fakes*disc_label).item()
 
-                fakes = env.disc2(p_input)
-                loss_c = criterion(output, ydata)
-                loss_c.backward()
+                    optim_c.step()
 
-                loss_d = torch.mean(fakes*disc_label)
-                mloss = mloss + loss_d.item()
-                loss_d.backward()
-                optim_c2.step()
-
-                optim_d2.step()
-                env.disc2.clip()
-
-                pred = output.argmax(axis=-1)
-                totcorrect += (pred==ydata).sum().item()
-                totcount += y.size(0)     
-
-            mloss = mloss / len(env.trainloader2)
+                    pred = output.argmax(axis=-1)
+                    totcorrect += (pred==ydata).sum().item()
+                    totcount += y.size(0)
+            mloss = mloss / len(valloader)
+            closs = closs / len(valloader)
+            mperturb = mperturb/len(valloader)
             macc = float(totcorrect)/totcount
-            if (e+1)%10 == 0:
-                print("Warmup epoch {} \t acc {:.4f}\t dloss {}".format(e+1, macc, mloss))
-        optim_c2 = torch.optim.Adam(env.classifier2.parameters(), lr=2*args.lr)
-        optim_c_t2 = torch.optim.Adam(env.classifier_test2.parameters(), lr=args.lr)
-        optim_d2 = torch.optim.RMSprop(env.disc2.parameters(), lr=2*args.lr)
-
-        sched_c2   = torch.optim.lr_scheduler.StepLR(optim_c2, 1, gamma=args.gamma)
-        sched_c_t2   = torch.optim.lr_scheduler.StepLR(optim_c_t2, 1, gamma=args.gamma)
-        sched_d2   = torch.optim.lr_scheduler.StepLR(optim_d2, 1, gamma=args.gamma)
-
-    optim_c = torch.optim.Adam(env.classifier.parameters(), lr=2*args.lr)
-    optim_c_t = torch.optim.Adam(env.classifier_test.parameters(), lr=args.lr)
-    optim_g = torch.optim.Adam(env.gen.parameters(), lr=args.lr)
-    optim_d = torch.optim.RMSprop(env.disc.parameters(), lr=2*args.lr)
-
-    sched_c   = torch.optim.lr_scheduler.StepLR(optim_c, 1, gamma=args.gamma)
-    sched_c_t   = torch.optim.lr_scheduler.StepLR(optim_c_t, 1, gamma=args.gamma)
-    sched_g   = torch.optim.lr_scheduler.StepLR(optim_g, 1, gamma=args.gamma)
-    sched_d   = torch.optim.lr_scheduler.StepLR(optim_d, 1, gamma=args.gamma)
+            print("Warmup epoch {} \t acc {:.4f}\t dloss {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}".format(
+                e+1, macc, mloss, closs, mperturb))
+            
+def Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper):
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr, weight_decay=args.lr/10)
+    optim_d = torch.optim.RMSprop(discriminator.parameters(), lr=args.lr, weight_decay=args.lr/10)
+    optim_g = torch.optim.Adam(shaper.parameters(), lr=args.lr, weight_decay=args.lr/2)
+    if args.gen == 'rnn':
+        optim_g = torch.optim.Adam(shaper.parameters(), lr=args.lr, weight_decay=args.lr/2)
+    criterion = nn.CrossEntropyLoss()
+    shaper.train()
+    bestnorm = args.amp * 2
+    bestacc = 0.99
+    avgnorm = args.amp
+    avgacc = 0.99
+    bestparams = deepcopy(shaper.state_dict())
     for e in range(args.epochs):
-        env.gen.train()
-        env.classifier.train()
-        
-        env.disc.train()
-        trainstart = time.time()
-        # Train classifier and discriminator
-
-        for x,y in env.trainloader:
-            xdata, ydata = x.cuda(), y.cuda()
+        classifier.train()
+        discriminator.train()
+        shaper.train()
+        #train both
+        for x,y in trainloader:
+            xdata, ydata = x.to(args.device), y.to(args.device)
             oneratio = ydata.sum().item()/len(ydata)
-            disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
-            shifted = shifter(xdata, args.history)
+            disc_label = 2*(ydata.float()-oneratio)
             #train classifier
             optim_c.zero_grad()
-            
             optim_d.zero_grad()
-            perturb = env.gen(shifted).view(shifted.size(0),-1)
+            perturb = shaper(xdata).detach()
+            output = classifier(xdata + perturb)
+            fakes = discriminator(xdata + perturb)
 
-            #interleaving?
-            p_input = xdata[:,args.history-1:]+perturb.detach()
-            output = env.classifier(p_input)
             
-            fakes = env.disc(p_input)
             loss_c = criterion(output, ydata)
+            loss_d = torch.mean(fakes*disc_label)
             loss_c.backward()
             
-            loss_d = torch.mean(fakes*disc_label)
             loss_d.backward()
+
             optim_c.step()
-            
             optim_d.step()
-            env.disc.clip()
+            discriminator.clip()
 
-            #train generator
+            pred = output.argmax(axis=-1)
+
             optim_g.zero_grad()
-
-            p_input = xdata[:,args.history-1:]+perturb
-            output = env.classifier(p_input)
-            
-            fakes = env.disc(p_input)
-            hinge = perturb.mean(dim=-1) - C
+            perturb = shaper(xdata)
+            hinge = perturb.mean(dim=-1) - args.amp
             hinge[hinge<0] = 0.0
+            output = classifier(xdata + perturb)
+            fakes = discriminator(xdata + perturb)
             loss_p = torch.mean(hinge)
             loss_d = -torch.mean(fakes*disc_label)
             fake_target = 1-ydata
 
             loss_adv1 = criterion(output, fake_target)
-            loss = loss_adv1 + scale*loss_p + 0.02*loss_d
+            loss = loss_adv1 + args.lambda_h*loss_p + args.lambda_d*loss_d
             loss.backward()
             optim_g.step()
 
-        env.classifier.train()
-        for x,y in env.trainloader:
+        #train again
+        for x,y in trainloader:
+            xdata, ydata = x.to(args.device), y.to(args.device)
             oneratio = ydata.sum().item()/len(ydata)
-            disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
-            shifted = shifter(xdata, args.history)
+            disc_label = 2*(ydata.float()-oneratio)
             #train classifier
             optim_c.zero_grad()
-            
             optim_d.zero_grad()
-            perturb = env.gen(shifted).view(shifted.size(0),-1)
+            perturb = shaper(xdata).detach()
+            output = classifier(xdata + perturb)
+            fakes = discriminator(xdata + perturb)
 
-            #interleaving?
-            p_input = xdata[:,args.history-1:]+perturb.detach()
-            output = env.classifier(p_input)
             
-            fakes = env.disc(p_input)
+            loss_c = criterion(output, ydata)
+            loss_d = torch.mean(fakes*disc_label)
+            loss_c.backward()
+            
+            loss_d.backward()
+
+            optim_c.step()
+            optim_d.step()
+            discriminator.clip()
+
+            pred = output.argmax(axis=-1)
+        
+
+    
+
+        #validation
+        totcorrect = 0
+        totcount = 0
+        mloss = 0.0
+        closs = 0.0
+        mperturb = 0.0
+        with torch.no_grad():
+            classifier.eval()
+            discriminator.eval()
+            shaper.train()
+            for x,y in valloader:
+                xdata, ydata = x.to(args.device), y.to(args.device)
+                oneratio = ydata.sum().item()/len(ydata)
+                disc_label = 2*(ydata.float()-oneratio)
+                #train classifier
+
+                perturb = shaper(xdata)
+                mperturb += perturb.mean().item()
+                output = classifier(xdata + perturb)
+                closs += criterion(output, ydata)
+                fakes = discriminator(xdata + perturb)
+                mloss += torch.mean(fakes*disc_label).item()
+
+                pred = output.argmax(axis=-1)
+                totcorrect += (pred==ydata).sum().item()
+                totcount += y.size(0)
+        mloss = mloss / len(valloader)
+        closs = closs / len(valloader)
+        mperturb = mperturb/len(valloader)
+        macc = float(totcorrect)/totcount
+        avgnorm = avgnorm*0.9 + mperturb*0.1
+        avgacc = avgacc*0.9 + macc*0.1
+        print("Epoch {} \t acc {:.4f}\t dloss {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}".format(
+            e+1, macc, mloss, closs, mperturb))
+        
+        if abs(bestacc-0.5) + 0.01*bestnorm > abs(avgacc-0.5) + 0.01*avgnorm and e > args.epochs//2:
+            bestacc = avgacc
+            bestnorm = avgnorm
+            bestparams = deepcopy(shaper.state_dict())
+    shaper.load_state_dict(bestparams)
+    return bestacc, bestnorm
+
+def train(args):
+    file_prefix=args.victim
+
+
+    trainset = LOTRDataset(file_prefix+'_train.pkl')
+    valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
+    trainloader = DataLoader(trainset, batch_size=args.batch_size, num_workers=8, shuffle=True)
+    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=8, shuffle=True)
+    testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
+    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=8)
+
+    classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
+    discriminator = NewModels.FCDiscriminator(window=trainset.tracelen).to(args.device)
+
+    shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    if args.gen == 'adv':
+        shaper = NewModels.GaussianShaper(history=args.window*args.history, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    if args.gen == 'qat':
+        shaper = NewModels.GaussianShaper(history=args.window*args.history, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+        #shaper = NewModels.QATShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
+        #shaper.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
+        #shaper = torch.quantization.prepare_qat(shaper, inplace=False)
+        #shaper = shaper.to(args.device)
+    elif args.gen == 'shaper':
+        shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    elif args.gen == 'rnn':
+        shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim).to(args.device)
+    Warmup(args,trainloader, valloader, classifier, discriminator,shaper)
+    bestacc, bestnorm = Train_DefenderGAN(args, trainloader,valloader, classifier, discriminator, shaper)
+    if args.gen == 'adv':
+        #model_fp32 = NewModels.GaussianQuantizedShaper(shaper).to('cpu').eval()
+        #model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+        #model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+        #input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+        #model_fp32_prepared(input_fp32)
+        #qshaper = torch.ao.quantization.convert(model_fp32_prepared)
+        print('\nEvaluating')
+        #bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+        bestacc, mperturb = cooldown_half(args, shaper.half(), classifier, valloader, testloader)
+    elif args.gen=='qat':
+        print('\nEvaluating')
+        shaper.to('cpu').eval()
+        #qshaper = torch.ao.quantization.convert(shaper, inplace=False)
+        #qshaper.eval()
+        qshaper = torch.ao.quantization.quantize_dynamic(
+            shaper,
+            {torch.nn.Linear},
+            dtype=torch.qint8
+        )
+        bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+    elif args.gen=='shaper':
+        #bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
+        bestacc, mperturb = cooldown_half(args, shaper.half(), classifier, valloader, testloader)
+    elif args.gen == 'rnn':
+        print('\nEvaluating')
+        bestacc, mperturb = cooldown(args, shaper.cpu(), classifier, valloader, testloader)
+    else:
+        #model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
+        #model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+        #model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+        #input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+        #model_fp32_prepared(input_fp32)
+        #qshaper = torch.ao.quantization.convert(model_fp32_prepared)
+        print('\nEvaluating')
+        #bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+        bestacc, mperturb = cooldown_half(args, shaper.half(), classifier, valloader, testloader)
+            
+    filename = "{}_{}_{}x_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.gen,args.window, args.dim, args.n_patterns,mperturb, bestacc)
+    torch.save(shaper.state_dict(), './gans/'+filename)
+    best = 1.0
+    smallest = 5.0
+    bperturb = 5.0
+    rp = re.compile(r"{}_{}_{}x_{}_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.victim,args.gen,args.window, args.dim,args.n_patterns))
+    flist = os.listdir('gans')
+    for fn in flist:
+        m = rp.match(fn)
+        if m:
+            facc = float(m.group(2))
+            fperturb = float(m.group(1))
+            if facc <= best:
+                best = facc
+                bperturb = fperturb
+            if fperturb <= smallest:
+                smallest = fperturb
+    if bestacc + 0.01*mperturb <= best + 0.01*bperturb:
+        print('New best found')
+        torch.save(shaper.state_dict(), './gans/'+\
+                   "{}_{}_{}x_{}_{}_best.pth".format(args.victim, args.gen, args.window,args.dim,args.n_patterns))
+
+def evaluate(args):
+    file_prefix=args.victim
+
+    trainset = LOTRDataset(file_prefix+'_train.pkl')
+    testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
+    valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
+    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=8)
+    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=8, shuffle=True)
+    
+
+    shaper = NewModels.AttnShaper(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    if args.gen == 'adv':
+        shaper = NewModels.GaussianShaper(history=args.window*args.history, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
+    elif args.gen == 'shaper':
+        shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+    elif args.gen == 'rnn':
+        shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim).to(args.device)
+    flist = os.listdir('gans')
+    reverse = {'rsa':'eddsa', 'eddsa':'rsa'}
+    victim = args.victim
+    if args.cross:
+        victim = reverse[args.victim]
+    rp = re.compile(r"{}_{}_{}x_{}_{}_(\d+\.\d+)_(\d+\.\d+)\.pth".format(victim, args.gen, args.window,args.dim,args.n_patterns))
+    modeltoacc = {}
+    for fname in flist:
+        m = rp.match(fname)
+        if m:
+            shaper.load_state_dict(torch.load('./gans/'+fname, map_location=args.device))
+            if args.gen == 'adv':
+                model_fp32 = NewModels.GaussianQuantizedShaper(shaper).to('cpu').eval()
+                model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+                model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+                input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+                model_fp32_prepared(input_fp32)
+                qshaper = torch.ao.quantization.convert(model_fp32_prepared)
+            elif args.gen == 'shaper':
+                qshaper=shaper
+                classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
+                bestacc, mperturb = cooldown_half(args, shaper.half(), classifier, valloader, testloader)
+                modeltoacc[fname] = (bestacc, mperturb)
+                continue
+            elif args.gen == 'rnn':
+                qshaper=shaper
+            else:
+                model_fp32 = NewModels.QuantizedShaper(shaper).to('cpu').eval()
+                model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+                model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+                input_fp32 = torch.randn(args.batch_size, valset.tracelen)
+                model_fp32_prepared(input_fp32)
+                qshaper = torch.ao.quantization.convert(model_fp32_prepared)
+            
+            print('\nEvaluating ' + fname)
+            #classifier = NewModels.ConvAttClassifier().to(args.device)
+            classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
+            bestacc, mperturb = cooldown(args, qshaper, classifier, valloader, testloader)
+            modeltoacc[fname] = (bestacc, mperturb)
+    print(modeltoacc)
+
+
+def cooldown(args, qshaper, classifier, valloader, testloader):
+    
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
+    criterion = nn.CrossEntropyLoss()
+
+    avgsvmacc = 0.0
+    before=time.time()
+    for i in range(10):
+        train_x = []
+        train_y = []
+        test_x = []
+        test_y = []
+        with torch.no_grad():
+            for x,y in valloader:
+                perturb = qshaper(x)
+                perturbed_x = x + perturb
+                for p in perturbed_x:
+                    train_x.append(p.cpu().numpy())
+                for y_i in y:
+                    train_y.append(y_i.item())
+            for x,y in testloader:
+                perturb = qshaper(x)
+                perturbed_x = x + perturb
+                for p in perturbed_x:
+                    test_x.append(p.cpu().numpy())
+                for y_i in y:
+                    test_y.append(y_i.item())
+        clf = svm.SVC(gamma='auto')
+        clf.fit(train_x, train_y)
+        pred_y = clf.predict(test_x)
+
+        svmacc = (pred_y == test_y).sum()/len(pred_y)
+        print("SVM epoch {}\t acc: {:.6f}".format(i,svmacc)) 
+        avgsvmacc += svmacc/10
+
+    bestacc = 0.5
+    avgnorm = args.amp
+    avgacc = 0.5
+    for e in range(args.cooldown):
+        classifier.train()
+        for x,y in valloader:
+            xdata, ydata = x, y.to(args.device)
+            #train classifier
+            optim_c.zero_grad()
+
+            perturb = qshaper(xdata).to(args.device)
+            output = classifier(xdata.to(args.device) + perturb)
+            
             loss_c = criterion(output, ydata)
             loss_c.backward()
             
-            loss_d = torch.mean(fakes*disc_label)
-            loss_d.backward()
             optim_c.step()
-            
-            optim_d.step()
-            env.disc.clip()
 
-        mloss = 0.0
-        mloss2 = 0.0
+            pred = output.argmax(axis=-1)
+
+        #validation
         totcorrect = 0
         totcount = 0
-        mnorm = 0.0
-
-        #evaluate classifier
+        closs = 0.0
+        mperturb = 0.0
         with torch.no_grad():
-            env.classifier.eval()
-            
-            for x,y in env.testloader:
-                xdata, ydata = x.cuda(), y.cuda()
-                oneratio = ydata.sum().item()/len(ydata)
-                disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
-                shifted = shifter(xdata, args.history)
-                perturb = env.gen(shifted).view(shifted.size(0),-1)
-                perturb = quantizer(perturb)
-                norm = torch.mean(perturb)
-                p_input = xdata[:,args.history-1:]+perturb.detach()
-                output = env.classifier(p_input)
-                
-                fakes = env.disc(p_input)
-                loss_c = criterion(output, ydata)
-                pnorm = torch.norm(perturb, dim=-1) - C
-                loss_p = torch.mean(torch.relu(pnorm))
+            classifier.eval()
+            for x,y in testloader:
+                xdata, ydata = x, y.to(args.device)
+                #train classifier
+                optim_c.zero_grad()
+
+                perturb = qshaper(xdata).to(args.device)
+                mperturb += perturb.mean().item()
+                output = classifier(xdata.to(args.device) + perturb)
+                closs += criterion(output, ydata)
+
                 pred = output.argmax(axis=-1)
-                
-                mnorm += norm.item()/len(env.testloader)
-                mloss += loss_c.item()/len(env.testloader)
-                mloss2 += torch.mean(fakes*disc_label).item()/len(env.testloader)
                 totcorrect += (pred==ydata).sum().item()
-                totcount += y.size(0)                
-            macc = float(totcorrect)/totcount
+                totcount += y.size(0)
+        closs = closs / len(testloader)
+        mperturb = mperturb/len(testloader)
+        macc = float(totcorrect)/totcount
+        avgnorm = avgnorm*0.9 + mperturb*0.1
+        
+        avgacc = avgacc*0.9 + macc*0.1
 
-            print("[{}]\tepoch {} \t acc {:.4f}\t Avg perturb {:.4f}\t closs {:.4f}\t dloss {}".format(
-                args.victim, e+1, macc, mnorm, mloss, mloss2))
-        if env.both:
-            env.gen.train()
-            env.classifier2.train()
+        if e==0:
+            avgnorm = mperturb
+            avgacc = macc
+        if e%10 == 9:
+            elapsed = time.time() - before
+            before += elapsed
+            print("Evaluate epoch {} \t acc {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}\t time: {: .4f}".format(
+                e+1, avgacc, closs, avgnorm, elapsed))
+        if avgacc > bestacc and e > args.cooldown//2:
+            bestacc = avgacc
+    
+      
+    return max(avgacc,avgsvmacc), mperturb
+def cooldown_half(args, qshaper, classifier, valloader, testloader):
+    
+    optim_c = torch.optim.Adam(classifier.parameters(), lr=args.lr*5, weight_decay=args.lr/2)
+    criterion = nn.CrossEntropyLoss()
+
+    avgsvmacc = 0.0
+    before=time.time()
+    for i in range(10):
+        train_x = []
+        train_y = []
+        test_x = []
+        test_y = []
+        with torch.no_grad():
+            for x,y in valloader:
+                perturb = qshaper(x.to(args.device).half()).float().cpu()
+                perturbed_x = x + perturb
+                for p in perturbed_x:
+                    train_x.append(p.cpu().numpy())
+                for y_i in y:
+                    train_y.append(y_i.item())
+            for x,y in testloader:
+                perturb = qshaper(x.to(args.device).half()).float().cpu()
+                perturbed_x = x + perturb
+                for p in perturbed_x:
+                    test_x.append(p.cpu().numpy())
+                for y_i in y:
+                    test_y.append(y_i.item())
+        clf = svm.SVC(gamma='auto')
+        clf.fit(train_x, train_y)
+        pred_y = clf.predict(test_x)
+
+        svmacc = (pred_y == test_y).sum()/len(pred_y)
+        print("SVM epoch {}\t acc: {:.6f}".format(i,svmacc)) 
+        avgsvmacc += svmacc/10
+
+    bestacc = 0.5
+    avgnorm = args.amp
+    avgacc = 0.5
+    for e in range(args.cooldown):
+        classifier.train()
+        for x,y in valloader:
+            xdata, ydata = x.to(args.device).half(), y.to(args.device)
+            #train classifier
+            optim_c.zero_grad()
+
+            perturb = qshaper(xdata).float()
+            output = classifier(xdata.float() + perturb)
             
-            env.disc2.train()
-            trainstart = time.time()
-            # Train classifier and discriminator
+            loss_c = criterion(output, ydata)
+            loss_c.backward()
+            
+            optim_c.step()
 
-            for x,y in env.trainloader2:
-                xdata, ydata = x.cuda(), y.cuda()
-                oneratio = ydata.sum().item()/len(ydata)
-                disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
-                shifted = shifter(xdata, args.history)
+            pred = output.argmax(axis=-1)
+
+        #validation
+        totcorrect = 0
+        totcount = 0
+        closs = 0.0
+        mperturb = 0.0
+        with torch.no_grad():
+            classifier.eval()
+            for x,y in testloader:
+                xdata, ydata = x.to(args.device).half(), y.to(args.device)
                 #train classifier
-                optim_c2.zero_grad()
-                
-                optim_d2.zero_grad()
-                perturb = env.gen(shifted).view(shifted.size(0),-1)
+                optim_c.zero_grad()
 
-                #interleaving?
-                p_input = xdata[:,args.history-1:]+perturb.detach()
-                output = env.classifier2(p_input)
-                
-                fakes = env.disc2(p_input)
-                loss_c = criterion(output, ydata)
-                loss_c.backward()
-                
-                loss_d = torch.mean(fakes*disc_label)
-                loss_d.backward()
-                optim_c2.step()
-                
-                optim_d2.step()
-                env.disc2.clip()
+                perturb = qshaper(xdata).float()
+                mperturb += perturb.mean().item()
+                output = classifier(xdata.float() + perturb)
+                closs += criterion(output, ydata)
 
-                #train generator
-                optim_g.zero_grad()
+                pred = output.argmax(axis=-1)
+                totcorrect += (pred==ydata).sum().item()
+                totcount += y.size(0)
+        closs = closs / len(testloader)
+        mperturb = mperturb/len(testloader)
+        macc = float(totcorrect)/totcount
+        avgnorm = avgnorm*0.9 + mperturb*0.1
+        
+        avgacc = avgacc*0.9 + macc*0.1
 
-                p_input = xdata[:,args.history-1:]+perturb
-                output = env.classifier2(p_input)
-                
-                fakes = env.disc2(p_input)
-                hinge = perturb.mean(dim=-1) - C
-                hinge[hinge<0] = 0.0
-                loss_p = torch.mean(hinge)
-                loss_d = -torch.mean(fakes*disc_label)
-                fake_target = 1-ydata
+        if e==0:
+            avgnorm = mperturb
+            avgacc = macc
+        if e%10 == 9:
+            elapsed = time.time() - before
+            before += elapsed
+            print("Evaluate epoch {} \t acc {:.4f}\t  closs {:.4f}\t mperturb: {:.4f}\t time: {: .4f}".format(
+                e+1, avgacc, closs, avgnorm, elapsed))
+        if avgacc > bestacc and e > args.cooldown//2:
+            bestacc = avgacc
+    
+      
+    return max(avgacc,avgsvmacc), mperturb
 
-                loss_adv1 = criterion(output, fake_target)
-                loss = (loss_adv1 + scale*loss_p + 0.02*loss_d)
-                loss.backward()
-                optim_g.step()
+def eval_noisegen(args):
+    if args.gen == 'gau':
+        shaper = NewModels.GaussianGenerator(args.amp)
+    elif args.gen == 'sin':
+        shaper = NewModels.GaussianSinusoid(args.amp)
+    else:
+        shaper = NewModels.OffsetGenerator(args.amp)
+    file_prefix=args.victim
+    trainset = LOTRDataset(file_prefix+'_train.pkl')
+    testset =  LOTRDataset(file_prefix+'_test.pkl', med=trainset.med)
+    valset = LOTRDataset(file_prefix+'_valid.pkl', med=trainset.med)
+    testloader = DataLoader(testset, batch_size=args.batch_size, num_workers=8)
+    valloader = DataLoader(valset, batch_size=args.batch_size, num_workers=8, shuffle=True)
+    classifier = NewModels.CNNModel(trainset.tracelen).to(args.device)
+    macc, mperturb = cooldown(args, shaper, classifier,valloader,testloader)
+    print("macc: {}\tmperturb: {}".format(macc,mperturb))
+if __name__ == '__main__':
+    #torch.backends.cuda.matmul.allow_tf32 = False
+    #torch.backends.cudnn.allow_tf32 = False
+    args = Util.get_args()
+    if args.gen in ['gau', 'sin', 'off']:
+        eval_noisegen(args)
+    elif args.mode == 'train':
+        train(args)
+    else:
+        evaluate(args)
 
-            env.classifier2.train()
-            for x,y in env.trainloader2:
-                oneratio = ydata.sum().item()/len(ydata)
-                disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
-                shifted = shifter(xdata, args.history)
-                #train classifier
-                optim_c2.zero_grad()
-                
-                optim_d2.zero_grad()
-                perturb = env.gen(shifted).view(shifted.size(0),-1)
 
-                #interleaving?
-                p_input = xdata[:,args.history-1:]+perturb.detach()
-                output = env.classifier2(p_input)
-                
-                fakes = env.disc2(p_input)
-                loss_c = criterion(output, ydata)
-                loss_c.backward()
-                
-                loss_d = torch.mean(fakes*disc_label)
-                loss_d.backward()
-                optim_c2.step()
-                
-                optim_d2.step()
-                env.disc2.clip()
-
-            mloss = 0.0
-            mloss2 = 0.0
-            totcorrect = 0
-            totcount = 0
-            mnorm = 0.0
-
-            #evaluate classifier
-            with torch.no_grad():
-                env.classifier2.eval()
-                for x,y in env.testloader2:
-                    xdata, ydata = x.cuda(), y.cuda()
-                    oneratio = ydata.sum().item()/len(ydata)
-                    disc_label = 2*(ydata.float()-oneratio) # 1 for ones, -1 for zeros
-                    shifted = shifter(xdata, args.history)
-                    perturb = env.gen(shifted).view(shifted.size(0),-1)
-                    perturb = quantizer(perturb)
-                    norm = torch.mean(perturb)
-                    p_input = xdata[:,args.history-1:]+perturb.detach()
-                    output = env.classifier2(p_input)
-                    
-                    fakes = env.disc2(p_input)
-                    loss_c = criterion(output, ydata)
-                    pnorm = torch.norm(perturb, dim=-1) - C
-                    loss_p = torch.mean(torch.relu(pnorm))
-                    pred = output.argmax(axis=-1)
-                    
-                    mnorm += norm.item()/len(env.testloader2)
-                    mloss += loss_c.item()/len(env.testloader2)
-                    mloss2 += torch.mean(fakes*disc_label).item()/len(env.testloader2)
-                    totcorrect += (pred==ydata).sum().item()
-                    totcount += y.size(0)                
-                macc = float(totcorrect)/totcount
-
-            print("[eddsa]\tepoch {} \t acc {:.4f}\t Avg perturb {:.4f}\t closs {:.4f}\t dloss {}".format(
-                e+1, macc, mnorm, mloss, mloss2))
-            sched_c2.step()
-            sched_d2.step()
-            sched_c_t2.step()
-        sched_c.step()
-        sched_d.step()
-        sched_c_t.step()
-        sched_g.step()
-
-    lastacc, lastnorm = Util.cooldown(args, env, env.gen, env.gen2)
-
-    if args.gen in ['adv', 'rnn', 'cnn', 'mlp', 'rnn3']:
-        filename = "{}_{}_{}_{:.3f}_{:.3f}.pth".format(args.victim,args.gen,args.dim,lastnorm, lastacc)
-        flist = os.listdir('gans')
-        best = 1.0
-        smallest = 5.0
-        bperturb = 5.0
-        rp = re.compile(r"{}_{}_{}_(\d\.\d+)_(\d\.\d+)\.pth".format(args.victim,args.gen,args.dim))
-        for fn in flist:
-            m = rp.match(fn)
-            if m:
-                facc = float(m.group(2))
-                fperturb = float(m.group(1))
-                if facc <= best:
-                    best = facc
-                    bperturb = fperturb
-                if fperturb <= smallest:
-                    smallest = fperturb
-        if lastacc + 0.01*lastnorm <= best + 0.01*bperturb:
-            print('New best found')
-            torch.save(env.gen.state_dict(), './gans/'+filename)
-            torch.save(env.gen.state_dict(), './gans/'+'best_{}_{}_{}.pth'.format(args.victim, args.gen, args.dim))
-        elif lastnorm <= smallest:
-            torch.save(env.gen.state_dict(), './gans/'+filename)
+    
+    
+    

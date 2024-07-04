@@ -27,7 +27,7 @@ def evaluate(args):
     if args.gen == 'adv':
         shaper = NewModels.GaussianShaper(history=args.window*2, window=args.window, amp=args.amp, dim=args.dim, n_patterns=args.n_patterns)
     elif args.gen == 'shaper':
-        shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
+        shaper = NewModels.AttnShaper2(amp=args.amp, history=args.window*args.history, window=args.window, dim=args.dim, n_patterns=args.n_patterns).to(args.device)
     elif args.gen == 'rnn':
         shaper = NewModels.RNNShaper(amp=args.amp, history=args.window*2, window=args.window, dim=args.dim).to(args.device)
     flist = os.listdir('gans')
